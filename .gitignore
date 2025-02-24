@@ -12,7 +12,9 @@ package-lock.json
 
 swagger_output.json
 
-./logs/*
-./docs/*
+logs/*
+docs/*
 
 .cursor/rules/*
+
+.pnpm-store/*
