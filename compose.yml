@@ -1,0 +1,161 @@
+services:
+  api:
+    container_name: api-express-ts
+    build:
+      context: .
+      target: ${TARGET:-development}
+    volumes:
+      - .:/app
+      - /app/node_modules
+    ports:
+      - "${API_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - DATABASE_URL=postgresql://user:password@postgres:5432/mydb?schema=public
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+    profiles:
+      - dev
+      - prod
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - POSTGRES_DB=${POSTGRES_DB:-mydb}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-mydb}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+    profiles:
+      - dev
+      - prod
+
+  adminer:
+    image: adminer:latest
+    ports:
+      - "${ADMINER_PORT:-9080}:8080"
+    volumes:
+      - adminer_data:/var/lib/adminer
+    networks:
+      - default
+    profiles:
+      - dev
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+    profiles:
+      - dev
+      - prod
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+    profiles:
+      - dev
+      - prod
+
+  caddy:
+    image: caddy:latest
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+    depends_on:
+      - api
+    networks:
+      - default
+    profiles:
+      - prod
+
+  ###> dozzle ###
+  dozzle:
+    image: amir20/dozzle:latest
+    ports:
+      - "${DOZZLE_PORT:-8888}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+    profiles:
+      - dev
+  ###< dozzle ###
+
+  worker:
+    container_name: api-express-ts-worker
+    build:
+      context: .
+      target: ${TARGET:-development}
+    command: pnpm run worker:stock
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - DATABASE_URL=postgresql://user:password@postgres:5432/mydb?schema=public
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+    profiles:
+      - dev
+      - prod
+
+volumes:
+  redis_data:
+  postgres_data:
+  adminer_data:
+  rabbitmq_data:
+
+networks:
+  default:
+    driver: bridge

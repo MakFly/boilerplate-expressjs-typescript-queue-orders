@@ -1,0 +1,43 @@
+# Dépendances
+node_modules
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Environnement
+.env
+.env.local
+.env.*.local
+
+# Build
+dist
+build
+
+# Système
+.DS_Store
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs
+logs
+*.log
+
+# Tests
+coverage
+.nyc_output
+
+dist
+*.env
+.git
+.gitignore
+.dockerignore
+README.md

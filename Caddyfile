@@ -1,0 +1,10 @@
+:80 {
+  # Active la journalisation des accès (optionnel)
+  log {
+    output file /var/log/caddy/access.log
+    format json
+  }
+
+  # Redirige toutes les requêtes vers le service "api" sur le port 3000
+  reverse_proxy api:3000
+}
