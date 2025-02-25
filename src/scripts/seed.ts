@@ -1,20 +1,34 @@
 import { PrismaClient, StockAlertType } from '@prisma/client';
 import { OrderService } from '../services/OrderService';
-import { StockService } from '../services/StockService';
 import { QueueService } from '../services/QueueService';
+import { PrismaService } from '../services/PrismaService';
+import { StockAlertService } from '../services/StockAlertService';
+import { StockService } from '../services/StockService';
+import { StockRepository } from '../repositories/StockRepository';
+
+// Définir l'URL de RabbitMQ pour le script de seed
+process.env.RABBITMQ_URL = 'amqp://guest:guest@rabbitmq:5672';
 
 const prisma = new PrismaClient();
-const orderService = new OrderService();
-const stockService = new StockService();
+const prismaService = new PrismaService();
 const queueService = QueueService.getInstance();
+const stockRepository = new StockRepository(prismaService);
+const stockAlertService = new StockAlertService(prismaService, queueService);
+const stockService = new StockService(stockRepository, queueService, prismaService, stockAlertService);
+const orderService = new OrderService();
 
 async function main() {
     // Initialiser la connexion RabbitMQ
     await queueService.connect();
     console.log('🔌 Tentative de connexion à RabbitMQ...');
 
+    // Purger les files d'attente
+    await queueService.purgeAllQueues();
+    console.log('🧹 Files d\'attente RabbitMQ purgées');
+
     console.log('🗑️ Nettoyage de la base de données...');
     await prisma.$transaction(async (tx) => {
+        await tx.stockAlertNotification.deleteMany();
         await tx.stockAlert.deleteMany();
         await tx.orderItem.deleteMany();
         await tx.order.deleteMany();
@@ -57,17 +71,7 @@ async function main() {
                 name: 'Écouteurs Sans Fil Pro',
                 price: 199.99,
                 stock: 8,
-                is_queuable: true,
-                stockAlerts: {
-                    create: {
-                        type: StockAlertType.LOW_STOCK,
-                        quantity: 8,
-                        metadata: {
-                            threshold: 10,
-                            message: "Stock bas - Réapprovisionnement recommandé"
-                        }
-                    }
-                }
+                is_queuable: true
             }
         });
 
@@ -77,17 +81,7 @@ async function main() {
                 name: 'Console de Jeu Limited Edition',
                 price: 499.99,
                 stock: 2,
-                is_queuable: true,
-                stockAlerts: {
-                    create: {
-                        type: StockAlertType.LOW_STOCK,
-                        quantity: 2,
-                        metadata: {
-                            threshold: 5,
-                            message: "Stock critique - Réapprovisionnement urgent"
-                        }
-                    }
-                }
+                is_queuable: true
             }
         });
 
@@ -97,21 +91,51 @@ async function main() {
                 name: 'Collector Edition 2024',
                 price: 299.99,
                 stock: 0,
-                is_queuable: true,
-                stockAlerts: {
-                    create: {
-                        type: StockAlertType.STOCK_OUT,
-                        quantity: 0,
-                        metadata: {
-                            message: "Rupture de stock - Réapprovisionnement requis"
-                        }
-                    }
-                }
+                is_queuable: true
             }
         });
 
         return [laptop, smartphone, earbuds, console, collector];
     });
+
+    console.log('🚨 Création des alertes de stock...');
+    
+    // Créer des alertes de stock et envoyer des notifications
+    const lowStockAlertId = await stockAlertService.createAlert({
+        type: StockAlertType.LOW_STOCK,
+        productId: products[2].id,
+        quantity: 8,
+        metadata: {
+            threshold: 10,
+            message: "Stock bas - Réapprovisionnement recommandé"
+        }
+    });
+    console.log(`✓ Alerte de stock bas créée pour ${products[2].name} (ID: ${lowStockAlertId})`);
+    
+    const criticalStockAlertId = await stockAlertService.createAlert({
+        type: StockAlertType.LOW_STOCK,
+        productId: products[3].id,
+        quantity: 2,
+        metadata: {
+            threshold: 5,
+            message: "Stock critique - Réapprovisionnement urgent"
+        }
+    });
+    console.log(`✓ Alerte de stock critique créée pour ${products[3].name} (ID: ${criticalStockAlertId})`);
+    
+    const stockOutAlertId = await stockAlertService.createAlert({
+        type: StockAlertType.STOCK_OUT,
+        productId: products[4].id,
+        quantity: 0,
+        metadata: {
+            message: "Rupture de stock - Réapprovisionnement requis"
+        }
+    });
+    console.log(`✓ Alerte de rupture de stock créée pour ${products[4].name} (ID: ${stockOutAlertId})`);
+
+    // Attendre que les notifications soient traitées
+    console.log('⏳ Attente du traitement des notifications...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
     console.log('📋 Création des commandes de test...');
     try {
@@ -150,6 +174,14 @@ async function main() {
                 }
             });
             console.log('✓ Commande 2 ajoutée à la queue (produit queuable)');
+            
+            // Créer une alerte pour la commande en file d'attente
+            await stockAlertService.createQueuedOrderAlert(
+                products[2].id,
+                3,
+                orderResponse2.order.id
+            );
+            console.log('✓ Alerte de commande en file d\'attente créée');
         }
 
         // 3. Tentative de commande avec stock insuffisant (queuable)
@@ -164,28 +196,28 @@ async function main() {
         } catch (error) {
             console.log('✓ Test de commande avec stock insuffisant réussi');
             // Créer une alerte FAILED_ORDER
-            await prisma.stockAlert.create({
-                data: {
-                    type: StockAlertType.FAILED_ORDER,
-                    quantity: 1,
-                    product_id: products[4].id,
-                    metadata: {
-                        reason: "Stock insuffisant",
-                        requestedQuantity: 1,
-                        availableStock: 0
-                    }
-                }
-            });
+            const failedOrderAlertId = await stockAlertService.createFailedOrderAlert(
+                products[4].id,
+                1,
+                "Stock insuffisant",
+                { orderId: undefined }
+            );
+            console.log(`✓ Alerte d'échec de commande créée (ID: ${failedOrderAlertId})`);
         }
 
     } catch (error) {
         console.error('Erreur lors de la création des commandes:', error);
     }
 
+    // Attendre que toutes les notifications soient traitées
+    console.log('⏳ Attente du traitement final des notifications...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
     // Afficher le résumé final
-    const [productCount, alertCount, orderCount] = await prisma.$transaction([
+    const [productCount, alertCount, notificationCount, orderCount] = await prisma.$transaction([
         prisma.product.count(),
         prisma.stockAlert.count(),
+        prisma.stockAlertNotification.count(),
         prisma.order.count()
     ]);
 
@@ -193,6 +225,7 @@ async function main() {
     console.log('📊 Résumé final :');
     console.log(`  - ${productCount} produits créés`);
     console.log(`  - ${alertCount} alertes de stock créées`);
+    console.log(`  - ${notificationCount} notifications d'alerte créées`);
     console.log(`  - ${orderCount} commandes créées`);
     
     console.log('\n🔍 État final des stocks et alertes :');
@@ -213,6 +246,16 @@ async function main() {
         p.stockAlerts.forEach(alert => {
             console.log(`      - Type: ${alert.type}, Quantité: ${alert.quantity}`);
         });
+    }
+
+    // Afficher les notifications créées
+    console.log('\n📢 Notifications créées :');
+    const notifications = await prisma.stockAlertNotification.findMany({
+        orderBy: { timestamp: 'desc' }
+    });
+    
+    for (const n of notifications) {
+        console.log(`  - [${n.severity}] ${n.message} (${n.productName})`);
     }
 
     // Fermer proprement les connexions

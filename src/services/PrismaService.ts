@@ -1,29 +1,19 @@
 import { PrismaClient } from '@prisma/client';
 
-class PrismaService {
-    private static instance: PrismaService;
-    private prisma: PrismaClient;
+export class PrismaService {
+    public client: PrismaClient;
 
-    private constructor() {
-        this.prisma = new PrismaClient({
-            log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-        });
+    constructor() {
+        this.client = new PrismaClient();
     }
 
-    public static getInstance(): PrismaService {
-        if (!PrismaService.instance) {
-            PrismaService.instance = new PrismaService();
-        }
-        return PrismaService.instance;
+    async connect(): Promise<void> {
+        await this.client.$connect();
     }
 
-    public getClient(): PrismaClient {
-        return this.prisma;
-    }
-
-    public async disconnect(): Promise<void> {
-        await this.prisma.$disconnect();
+    async disconnect(): Promise<void> {
+        await this.client.$disconnect();
     }
 }
 
-export const prisma = PrismaService.getInstance().getClient(); 
+export const prisma = new PrismaService().client;

@@ -33,11 +33,3 @@ export interface OrderItemDto {
     price: number;
     name: string;
 }
-
-export interface CreateOrderDto {
-    userId: string;
-    items: Array<{
-        productId: string;
-        quantity: number;
-    }>;
-} 

@@ -1,10 +1,28 @@
-:80 {
-  # Active la journalisation des accès (optionnel)
-  log {
-    output file /var/log/caddy/access.log
-    format json
-  }
+{
+    email admin@votredomaine.com
+}
 
-  # Redirige toutes les requêtes vers le service "api" sur le port 3000
-  reverse_proxy api:3000
+:80 {
+    reverse_proxy api:3000 {
+        health_path /health
+        health_interval 30s
+        health_timeout 10s
+        health_status 200
+        lb_policy round_robin
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-XSS-Protection "1; mode=block"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Content-Security-Policy "default-src 'self'"
+        Cache-Control "public, max-age=3600"
+    }
+
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
 }

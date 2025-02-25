@@ -1,0 +1,138 @@
+services:
+  api:
+    build:
+      context: .
+      target: development
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - DATABASE_URL=postgresql://user:password@postgres:5432/mydb?schema=public
+    volumes:
+      - .:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    command: pnpm run dev
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # Utilisation de services distincts pour chaque worker au lieu de replicas
+  worker1:
+    build:
+      context: .
+      target: development
+    environment:
+      - NODE_ENV=development
+      - WORKER_TYPE=stockVerification
+      - WORKER_PREFETCH=1
+      - WORKER_ID=1
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - DATABASE_URL=postgresql://user:password@postgres:5432/mydb?schema=public
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: pnpm run worker:stock
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+        
+  worker2:
+    build:
+      context: .
+      target: development
+    environment:
+      - NODE_ENV=development
+      - WORKER_TYPE=stockVerification
+      - WORKER_PREFETCH=1
+      - WORKER_ID=2
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - DATABASE_URL=postgresql://user:password@postgres:5432/mydb?schema=public
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: pnpm run worker:stock
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dev:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_dev:/var/lib/rabbitmq
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - POSTGRES_DB=${POSTGRES_DB:-mydb}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-mydb}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  adminer:
+    image: adminer:latest
+    ports:
+      - "${ADMINER_PORT:-9080}:8080"
+    volumes:
+      - adminer_data:/var/lib/adminer
+
+  ###> dozzle ###
+  dozzle:
+    image: amir20/dozzle:latest
+    ports:
+      - "${DOZZLE_PORT:-8888}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+  ###< dozzle ###
+
+volumes:
+  redis_dev:
+  postgres_data:
+  rabbitmq_dev:
+  adminer_data:

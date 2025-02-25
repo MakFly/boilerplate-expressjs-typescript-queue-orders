@@ -11,13 +11,13 @@ export const errorHandler = (
 ) => {
     // Log l'erreur
     logger.error('Error:', {
-        error: err.message,
-        stack: err.stack,
-        path: req.path,
-        method: req.method,
         body: req.body,
+        error: err.message,
+        method: req.method,
         params: req.params,
-        query: req.query
+        path: req.path,
+        query: req.query,
+        stack: err.stack
     });
 
     // Gestion des erreurs de validation Zod
@@ -29,12 +29,21 @@ export const errorHandler = (
         });
     }
 
+    // Gestion des erreurs de parsing JSON
+    if (err instanceof SyntaxError && 'body' in err) {
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid JSON format',
+            error: err.message
+        });
+    }
+
     // Gestion des erreurs API personnalisées
     if (err instanceof ApiError) {
         return res.status(err.statusCode).json({
             success: false,
             message: err.message,
-            details: err.details
+            errors: err.details
         });
     }
 
@@ -44,4 +53,6 @@ export const errorHandler = (
         message: 'Une erreur interne est survenue',
         error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
-}; 
+};
+
+export default errorHandler; 

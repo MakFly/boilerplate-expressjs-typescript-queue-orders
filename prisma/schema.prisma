@@ -76,4 +76,26 @@ model StockAlert {
 
   @@index([product_id])
   @@index([order_id])
+}
+
+enum StockAlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model StockAlertNotification {
+  id          String             @id @default(uuid())
+  type        StockAlertType
+  productId   String
+  productName String
+  message     String
+  severity    StockAlertSeverity
+  timestamp   DateTime           @default(now())
+  read        Boolean            @default(false)
+  metadata    Json?
+  
+  @@index([productId])
+  @@index([timestamp])
 } 

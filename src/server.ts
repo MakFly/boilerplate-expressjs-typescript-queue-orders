@@ -1,7 +1,20 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import app from './app';
+import http from 'http';
+import { initWebSocketController } from './controllers/WebSocketController';
+import logger from './utils/logger';
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+// Créer un serveur HTTP à partir de l'application Express
+const server = http.createServer(app);
+
+// Initialiser le contrôleur WebSocket
+// initWebSocketController(server);
+
+// Démarrer le serveur
+server.listen(PORT, () => {
+    logger.info(`🚀 Server running on port ${PORT}`);
 });

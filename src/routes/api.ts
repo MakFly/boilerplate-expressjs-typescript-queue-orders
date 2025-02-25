@@ -1,12 +1,22 @@
 import { Router } from 'express';
 import authRouter from './auth';
-import userRoutes from './users.route';
-import ordersRoutes from './orders.route';
+import usersRouter from './users.route';
+import ordersRouter from './orders.route';
 
 const router = Router();
 
+// Routes de base
+router.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Routes d'authentification
 router.use('/auth', authRouter);
-router.use('/users', userRoutes);
-router.use('/orders', ordersRoutes);
+
+// Routes utilisateurs
+router.use('/users', usersRouter);
+
+// Routes commandes
+router.use('/orders', ordersRouter);
 
 export default router;

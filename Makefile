@@ -1,7 +1,8 @@
 .PHONY: build run stop clean logs help
 
 # Docker image and container names
-CONTAINER_NAME = api-express-ts
+# CONTAINER_NAME = api-express-ts # compose.yml
+CONTAINER_NAME = express-typescript-boilerplate-api-1 # compose.dev.yml
 
 # Default target
 .DEFAULT_GOAL := help
@@ -13,7 +14,7 @@ build: ## Build the Docker image
 	docker compose --env-file .env.development --profile dev build
 
 dev: ## Run the container in development mode with hot-reload
-	docker compose --env-file .env.development --profile dev up -d
+#	docker compose --env-file .env.development --profile dev up -d
 
 prod: ## Run the container in production mode
 	docker compose --env-file .env.production --profile prod up -d

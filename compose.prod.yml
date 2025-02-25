@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      target: production
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - DATABASE_URL=postgresql://prod:${DB_PASSWORD}@postgres:5432/myapp?schema=public
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      target: production
+    deploy:
+      replicas: ${WORKER_REPLICAS:-3}
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+    environment:
+      - NODE_ENV=production
+      - WORKER_COUNT=${WORKER_COUNT:-4}
+      - WORKER_TYPE=stockVerification
+      - WORKER_PREFETCH=10
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+      - DATABASE_URL=postgresql://prod:${DB_PASSWORD}@postgres:5432/myapp?schema=public
+    command: npm run workers:prod
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis_prod:/data
+    command: redis-server --appendonly yes
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.9-management-alpine
+    volumes:
+      - rabbitmq_prod:/var/lib/rabbitmq
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_USER: prod
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: myapp
+    volumes:
+      - postgres_prod:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prod -d myapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_prod:
+  postgres_prod:
+  rabbitmq_prod:
+  caddy_data:
+  caddy_config:

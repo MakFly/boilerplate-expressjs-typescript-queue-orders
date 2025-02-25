@@ -1,54 +1,57 @@
-import { User } from '../types/User';
+import { PrismaService } from "./PrismaService";
+import { User } from "@prisma/client";
 
-class UserService {
-    private users: User[] = [
-        {
-            id: 1,
-            name: "John Doe",
-            email: "john@example.com",
-            createdAt: new Date()
-        }
-    ];
-
-    async findAll(): Promise<User[]> {
-        return this.users;
-    }
-
-    async findById(id: number): Promise<User | undefined> {
-        return this.users.find(u => u.id === id);
-    }
-
-    async create(userData: Omit<User, 'id' | 'createdAt'>): Promise<User> {
-        const newUser: User = {
-            id: this.users.length + 1,
-            ...userData,
-            createdAt: new Date()
-        };
-        this.users.push(newUser);
-        return newUser;
-    }
-
-    async update(id: number, userData: Partial<User>): Promise<User | null> {
-        const userIndex = this.users.findIndex(u => u.id === id);
-        if (userIndex === -1) return null;
-
-        this.users[userIndex] = {
-            ...this.users[userIndex],
-            ...userData
-        };
-
-        return this.users[userIndex];
-    }
-
-    async delete(id: number): Promise<boolean> {
-        const initialLength = this.users.length;
-        this.users = this.users.filter(u => u.id !== id);
-        return this.users.length !== initialLength;
-    }
-
-    async findByEmail(email: string): Promise<User | undefined> {
-        return this.users.find(u => u.email === email);
-    }
+export interface IUserService {
+  findById(id: string): Promise<User | null>;
+  create(userData: Omit<User, "id" | "createdAt" | "updatedAt">): Promise<User>;
+  findAll(): Promise<User[]>;
+  update(id: string, userData: Partial<User>): Promise<User | null>;
+  delete(id: string): Promise<boolean>;
+  findByEmail(email: string): Promise<User | null>;
+  validateUser(email: string, password: string): Promise<User | null>;
 }
 
-export const userService = new UserService(); 
+export class UserService implements IUserService {
+  constructor(private readonly prismaService: PrismaService) {}
+
+  async findById(id: string): Promise<User | null> {
+    return this.prismaService.client.user.findUnique({ where: { id } });
+  }
+
+  async create(
+    userData: Omit<User, "id" | "createdAt" | "updatedAt">
+  ): Promise<User> {
+    return this.prismaService.client.user.create({
+      data: userData,
+    });
+  }
+
+  async findAll(): Promise<User[]> {
+    return this.prismaService.client.user.findMany();
+  }
+
+  async update(id: string, userData: Partial<User>): Promise<User | null> {
+    return this.prismaService.client.user.update({
+      where: { id },
+      data: userData,
+    });
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const user = await this.prismaService.client.user.delete({ where: { id } });
+    return !!user;
+  }
+
+  async findByEmail(email: string): Promise<User | null> {
+    return this.prismaService.client.user.findUnique({ where: { email } });
+  }
+
+  async validateUser(email: string, password: string): Promise<User | null> {
+    const user = await this.findByEmail(email);
+    if (!user) {
+      return null;
+    }
+    // Note: Implement actual password validation here when authentication is added
+    return user;
+  }
+}

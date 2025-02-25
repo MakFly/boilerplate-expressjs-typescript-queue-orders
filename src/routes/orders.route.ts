@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { OrderController } from '../controllers/OrderController';
-import { authMiddleware } from '../middleware/authMiddleware';
+import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -27,4 +27,4 @@ router.post('/:id/validate', orderController.validateOrder.bind(orderController)
 // Supprimer une commande
 router.delete('/:id', orderController.deleteOrder.bind(orderController));
 
-export default router; 
+export default router;

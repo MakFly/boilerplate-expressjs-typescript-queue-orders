@@ -1,60 +1,40 @@
-import { PrismaClient, Product, StockAlert, StockAlertType } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
+import { PrismaService } from '../services/PrismaService';
 
 export class StockRepository {
-    private prisma: PrismaClient;
-
-    constructor() {
-        this.prisma = new PrismaClient();
-    }
+    constructor(private prisma: PrismaService) {}
 
     async findProductWithStock(productId: string) {
-        return this.prisma.product.findUnique({
+        return this.prisma.client.product.findUnique({
             where: { id: productId },
-            select: { id: true, stock: true, is_queuable: true }
+            select: { id: true, stock: true, is_queuable: true, name: true }
         });
     }
 
     async updateStock(productId: string, quantity: number, options?: { transaction?: PrismaClient }) {
-        const prisma = options?.transaction || this.prisma;
-        return prisma.product.update({
+        const prisma = options?.transaction || this.prisma.client;
+        const product = await prisma.product.update({
             where: { id: productId },
-            data: { stock: quantity }
+            data: { stock: quantity },
+            select: { stock: true }
         });
-    }
-
-    async createStockAlert(data: {
-        type: StockAlertType;
-        quantity: number;
-        productId: string;
-        orderId?: string;
-        metadata?: any;
-    }, options?: { transaction?: PrismaClient }) {
-        const prisma = options?.transaction || this.prisma;
-        return prisma.stockAlert.create({
-            data: {
-                type: data.type,
-                quantity: data.quantity,
-                product_id: data.productId,
-                order_id: data.orderId,
-                metadata: data.metadata
-            }
-        });
+        return product.stock;
     }
 
     async getStockAlerts(productId: string) {
-        return this.prisma.stockAlert.findMany({
+        return this.prisma.client.stockAlert.findMany({
             where: { product_id: productId },
             orderBy: { created_at: 'desc' }
         });
     }
 
     async verifyStockAvailability(items: Array<{ productId: string; quantity: number }>) {
-        return this.prisma.$transaction(async (tx) => {
+        return this.prisma.client.$transaction(async (tx) => {
             const results = await Promise.all(
                 items.map(async (item) => {
                     const product = await tx.product.findFirst({
                         where: { id: item.productId },
-                        select: { id: true, stock: true },
+                        select: { id: true, stock: true, name: true },
                         orderBy: { id: 'asc' }
                     });
 
@@ -70,7 +50,8 @@ export class StockRepository {
                         productId: item.productId,
                         isAvailable: product.stock >= item.quantity,
                         currentStock: product.stock,
-                        requestedQuantity: item.quantity
+                        requestedQuantity: item.quantity,
+                        productName: product.name
                     };
                 })
             );
@@ -80,4 +61,12 @@ export class StockRepository {
             isolationLevel: 'Serializable'
         });
     }
-} 
+
+    async getStockLevel(productId: string): Promise<number> {
+        const product = await this.prisma.client.product.findUnique({
+            where: { id: productId },
+            select: { stock: true }
+        });
+        return product?.stock ?? 0;
+    }
+}

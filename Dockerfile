@@ -3,7 +3,7 @@ FROM node:20-alpine as base
 
 # Installation de pnpm et des dépendances système communes
 RUN npm install -g pnpm && \
-    apk add --no-cache python3 make g++
+    apk add --no-cache python3 make g++ openssl openssl-dev
 
 # Installation des outils globaux
 RUN npm install -g pnpm nodemon ts-node typescript
@@ -55,6 +55,9 @@ ENV NODE_ENV=development
 ENV PORT=3000
 
 COPY . .
+
+# Installation de toutes les dépendances, y compris ws et @types/ws
+RUN pnpm install
 
 EXPOSE 3000
 

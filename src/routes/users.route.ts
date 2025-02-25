@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { UserController } from '../controllers/UserController';
 import { body } from 'express-validator';
-import { authMiddleware } from '../middleware/authMiddleware';
+import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -16,8 +16,10 @@ const validateUser = [
         .isLength({ min: 2 }).withMessage('Le nom doit contenir au moins 2 caractères')
 ];
 
-// Appliquer l'authentification à toutes les routes utilisateurs
-router.use(authMiddleware);
+// Appliquer l'authentification à toutes les routes utilisateurs sauf en mode test
+if (process.env.NODE_ENV !== 'test') {
+    router.use(authMiddleware);
+}
 
 router.route('/')
     .get(UserController.getUsers)

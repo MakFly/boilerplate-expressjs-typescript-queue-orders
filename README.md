@@ -1,194 +1,91 @@
-# Express TypeScript Boilerplate avec File d'Attente
+# Express TypeScript Boilerplate with Queue System
 
-Ce projet est un boilerplate Express.js en TypeScript intégrant un système de file d'attente asynchrone avec RabbitMQ et Redis pour la gestion des commandes à fort trafic.
+A robust Express.js TypeScript boilerplate with asynchronous queue management, real-time stock alerts, and comprehensive monitoring capabilities.
 
-## 🚀 Fonctionnalités
+## Key Features
 
-- Gestion asynchrone des commandes avec RabbitMQ
-- Cache avec Redis
-- Base de données PostgreSQL avec Prisma
-- Interface d'administration avec Adminer
-- Monitoring des logs avec Dozzle
-- Reverse proxy avec Caddy
+- Asynchronous order processing with RabbitMQ
+- Real-time stock alerts and monitoring
+- WebSocket integration for live logs and notifications
+- PostgreSQL database with Prisma ORM
+- Redis caching for performance optimization
+- Comprehensive API documentation with Swagger
 
-## 📋 Prérequis
+## Quick Start
 
-- Docker et Docker Compose
-- Node.js >= 16
-- npm ou pnpm
-
-## 🛠 Installation
-
-1. Cloner le repository :
 ```bash
-git clone [votre-repo]
+# Clone the repository
+git clone [your-repo]
 cd express-typescript-boilerplate
+
+# Install dependencies
+npm install
+# or
+pnpm install
+
+# Start development environment
+docker-compose -f compose.dev.yml up -d
+npm run dev
 ```
 
-2. Installer les dépendances :
+## Documentation
+
+For detailed documentation, please refer to the [/docs](/docs) directory:
+
+- [Installation Guide](/docs/INSTALLATION.md)
+- [Architecture Overview](/docs/ARCHITECTURE.md)
+- [API Reference](/docs/API.md)
+- [Stock Management System](/docs/STOCK_MANAGEMENT.md)
+- [Real-time Monitoring](/docs/MONITORING.md)
+- [Frontend Integration](/docs/FRONTEND_INTEGRATION.md)
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+---
+
+# Express TypeScript Boilerplate avec Système de File d'Attente
+
+Un boilerplate Express.js en TypeScript robuste avec gestion de file d'attente asynchrone, alertes de stock en temps réel et capacités de surveillance complètes.
+
+## Fonctionnalités Principales
+
+- Traitement asynchrone des commandes avec RabbitMQ
+- Alertes et surveillance des stocks en temps réel
+- Intégration WebSocket pour logs et notifications en direct
+- Base de données PostgreSQL avec ORM Prisma
+- Cache Redis pour l'optimisation des performances
+- Documentation API complète avec Swagger
+
+## Démarrage Rapide
+
 ```bash
+# Cloner le dépôt
+git clone [votre-repo]
+cd express-typescript-boilerplate
+
+# Installer les dépendances
 npm install
 # ou
 pnpm install
+
+# Démarrer l'environnement de développement
+docker-compose -f compose.dev.yml up -d
+npm run dev
 ```
 
-3. Copier le fichier d'environnement :
-```bash
-cp .env.example .env
-```
+## Documentation
 
-4. Lancer l'environnement Docker :
-```bash
-docker-compose up -d
-```
+Pour une documentation détaillée, veuillez consulter le répertoire [/docs](/docs) :
 
-## 🔄 Architecture du Système de File d'Attente
+- [Guide d'Installation](/docs/INSTALLATION.md)
+- [Vue d'Ensemble de l'Architecture](/docs/ARCHITECTURE.md)
+- [Référence API](/docs/API.md)
+- [Système de Gestion des Stocks](/docs/STOCK_MANAGEMENT.md)
+- [Surveillance en Temps Réel](/docs/MONITORING.md)
+- [Intégration Frontend](/docs/FRONTEND_INTEGRATION.md)
 
-Le système utilise trois services principaux :
+## Licence
 
-### 1. OrderService
-- Gère la logique métier des commandes
-- Décide si une commande doit être mise en file d'attente
-- Limite à ${MAX_CONCURRENT_ORDERS} commandes simultanées
-
-### 2. QueueService (RabbitMQ)
-- Gère la file d'attente des commandes
-- Assure la persistance des messages
-- Gère les reprises en cas d'échec
-
-### 3. CacheService (Redis)
-- Stocke les données temporaires
-- Gère les compteurs de commandes actives
-- Optimise les performances
-
-## 📊 Monitoring
-
-### Logs Docker
-Pour suivre les logs en temps réel :
-```bash
-# Tous les services
-docker-compose logs -f
-
-# Service spécifique
-docker-compose logs -f api
-docker-compose logs -f rabbitmq
-docker-compose logs -f redis
-```
-
-### Interfaces Web
-- RabbitMQ Management : http://localhost:15672 (user/password)
-- Adminer (DB) : http://localhost:9080
-- Dozzle (Logs) : http://localhost:8888
-
-## 🧪 Test du Système
-
-1. Lancer le seeder :
-```bash
-npm run seed
-# ou
-pnpm run seed
-```
-
-2. Vérifier dans l'interface RabbitMQ :
-- Accéder à http://localhost:15672
-- Voir les messages dans la queue "orders_queue"
-
-## 📝 Endpoints API
-
-- `POST /api/orders` : Créer une nouvelle commande
-- `GET /api/orders` : Lister toutes les commandes
-- `GET /api/orders/:id` : Détails d'une commande
-- `PUT /api/orders/:id/status` : Mettre à jour le statut
-- `DELETE /api/orders/:id` : Supprimer une commande
-
-## 🔍 Surveillance des Files d'Attente
-
-1. **Interface RabbitMQ** (http://localhost:15672)
-   - Voir le nombre de messages en attente
-   - Surveiller la consommation
-   - Gérer les files d'attente
-
-2. **Logs avec Dozzle** (http://localhost:8888)
-   - Voir les logs en temps réel
-   - Filtrer par service
-   - Rechercher des événements spécifiques
-
-## 📁 Structure du Projet
-
-```
-.
-├── src/
-│   ├── controllers/     # Contrôleurs de l'application
-│   ├── middlewares/    # Middlewares personnalisés
-│   ├── routes/         # Définition des routes
-│   ├── auth/           # Authentification
-│   ├── app.ts          # Configuration Express
-│   └── server.ts       # Point d'entrée
-├── tests/              # Tests
-├── Dockerfile          # Configuration Docker
-├── docker-compose.yml  # Configuration Docker Compose
-└── tsconfig.json       # Configuration TypeScript
-```
-
-## 🔑 API Endpoints
-
-### Utilisateurs
-
-```
-GET    /api/users      # Liste tous les utilisateurs
-POST   /api/users      # Crée un nouvel utilisateur
-GET    /api/users/:id  # Récupère un utilisateur par ID
-PUT    /api/users/:id  # Met à jour un utilisateur
-DELETE /api/users/:id  # Supprime un utilisateur
-```
-
-#### Exemple de requête POST /api/users
-
-```json
-{
-  "email": "user@example.com",
-  "name": "John Doe"
-}
-```
-
-## 🔒 Sécurité
-
-Le projet inclut plusieurs mesures de sécurité :
-
-- **Helmet** - Protection contre les vulnérabilités web courantes
-- **Rate Limiting** - Protection contre les attaques par force brute
-- **CORS** - Configuration sécurisée des Cross-Origin Resource Sharing
-- **Validation** - Validation des entrées utilisateur
-
-## 📚 Documentation API
-
-La documentation Swagger est disponible à l'adresse :
-```
-http://localhost:3000/api-docs
-```
-
-## 🧪 Tests
-
-```bash
-# Exécuter les tests
-pnpm test
-
-# Exécuter les tests avec couverture
-pnpm test:coverage
-```
-
-## 🤝 Contribution
-
-1. Fork le projet
-2. Créer une branche (`git checkout -b feature/amazing-feature`)
-3. Commit les changements (`git commit -m 'feat: add amazing feature'`)
-4. Push sur la branche (`git push origin feature/amazing-feature`)
-5. Ouvrir une Pull Request
-
-## 📝 License
-
-Ce projet est sous licence MIT. Voir le fichier `LICENSE` pour plus de détails.
-
-## 🆘 Support
-
-Pour toute question ou problème, veuillez ouvrir une issue dans le repository GitHub. 
+Ce projet est sous licence MIT - voir le fichier LICENSE pour plus de détails. 
