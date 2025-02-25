@@ -18,3 +18,5 @@ docs/*
 .cursor/rules/*
 
 .pnpm-store/*
+
+dist/*
