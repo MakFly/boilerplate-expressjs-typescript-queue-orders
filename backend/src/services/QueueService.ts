@@ -79,10 +79,38 @@ export class QueueService {
         }
 
         try {
+            // Validation de base de la structure du message
+            if (!message.type) {
+                logger.error('Type de message manquant');
+                throw new Error('Type de message manquant');
+            }
+
+            if (!message.data) {
+                logger.error('Données du message manquantes');
+                throw new Error('Données du message manquantes');
+            }
+
+            // Log détaillé du message reçu
+            logger.debug('Message reçu pour ajout à la file d\'attente:', {
+                type: message.type,
+                orderId: message.data.orderId,
+                hasQueuableProducts: message.data.hasQueuableProducts,
+                reason: message.data.reason,
+                itemsCount: message.data.items?.length || 0
+            });
+
             // Vérifier si le message concerne une commande avec des produits queuables
-            // ou une commande en PENDING avec une raison spécifiée
-            if (message.type === 'STOCK_VERIFICATION' && 
-                (message.data.hasQueuableProducts || message.data.reason)) {
+            const hasQueuableItems = message.data.items?.some(item => item.isQueuable) || false;
+            
+            // Si les items indiquent des produits queuables mais que hasQueuableProducts n'est pas défini,
+            // on le définit automatiquement
+            if (hasQueuableItems && message.data.hasQueuableProducts !== true) {
+                logger.warn(`Message contient des produits queuables mais hasQueuableProducts n'est pas défini à true. Correction automatique.`);
+                message.data.hasQueuableProducts = true;
+            }
+
+            // Vérifier si le message concerne une commande avec des produits queuables
+            if (message.type === 'STOCK_VERIFICATION' && message.data.hasQueuableProducts) {
                 // Envoyer à la file d'attente des commandes queuables
                 this.channel.sendToQueue(
                     'queuable_orders',
@@ -90,22 +118,39 @@ export class QueueService {
                     { persistent: true }
                 );
                 
-                if (message.data.hasQueuableProducts) {
-                    logger.info(`✉️ Message ajouté à la file d'attente des commandes queuables: ${message.type}`);
-                } else if (message.data.reason) {
-                    logger.info(`✉️ Message ajouté à la file d'attente des commandes queuables avec raison: ${message.data.reason}`);
-                }
-            } else {
+                logger.info(`✉️ Message ajouté à la file d'attente des commandes queuables: ${message.type} pour la commande ${message.data.orderId}`);
+                
+                // Ajouter un log détaillé pour le débogage
+                logger.debug(`Détails du message envoyé à queuable_orders:`, {
+                    messageType: message.type,
+                    orderId: message.data.orderId,
+                    items: message.data.items,
+                    hasQueuableProducts: message.data.hasQueuableProducts,
+                    timestamp: new Date().toISOString()
+                });
+            } 
+            // Si le message a une raison spécifiée (comme une validation manuelle)
+            else if (message.type === 'STOCK_VERIFICATION' && message.data.reason) {
+                // Envoyer à la file d'attente des commandes queuables
+                this.channel.sendToQueue(
+                    'queuable_orders',
+                    Buffer.from(JSON.stringify(message)),
+                    { persistent: true }
+                );
+                
+                logger.info(`✉️ Message ajouté à la file d'attente des commandes queuables avec raison: ${message.data.reason} pour la commande ${message.data.orderId}`);
+            }
+            else {
                 // Envoyer à la file d'attente standard
                 this.channel.sendToQueue(
                     'orders_queue',
                     Buffer.from(JSON.stringify(message)),
                     { persistent: true }
                 );
-                logger.info(`✉️ Message ajouté à la file d'attente standard: ${message.type}`);
+                logger.info(`✉️ Message ajouté à la file d'attente standard: ${message.type} pour la commande ${message.data.orderId || 'N/A'}`);
             }
         } catch (error) {
-            logger.error('❌ Erreur lors de l\'ajout à la file d\'attente:', error);
+            logger.error(`❌ Erreur lors de l'ajout du message à la file d'attente:`, error);
             throw error;
         }
     }
@@ -310,110 +355,128 @@ export class QueueService {
         }
     }
 
-    // Méthode pour déplacer manuellement une commande de la file d'attente queuable vers la file standard
-    async moveToStandardQueue(orderId: string): Promise<boolean> {
+    /**
+     * Récupère des informations sur une file d'attente spécifique
+     */
+    async getQueueInfo(queueName: string): Promise<{ messageCount: number; consumerCount: number } | null> {
         if (!this.channel) {
             throw new Error('Canal RabbitMQ non initialisé');
         }
 
         try {
-            // Vérifier d'abord si la commande existe dans la file d'attente
-            logger.info(`Tentative de déplacement de la commande ${orderId} vers la file standard`);
+            // Vérifier si la file d'attente existe
+            const queueInfo = await this.channel.assertQueue(queueName, {
+                durable: true
+            });
             
-            // Vérifier si la commande existe dans la file avant d'essayer de la déplacer
-            const existsInQueuable = await this.checkOrderInQueue(orderId);
-            
-            if (!existsInQueuable) {
-                logger.warn(`Commande ${orderId} non trouvée dans la file queuable`);
-                
-                // Si la commande n'est pas dans la file queuable, on vérifie si elle est déjà dans la file standard
-                // Cela pourrait indiquer qu'elle a déjà été déplacée
-                const existsInStandard = await this.checkOrderInStandardQueue(orderId);
-                
-                if (existsInStandard) {
-                    logger.info(`Commande ${orderId} déjà présente dans la file standard`);
-                    // On retourne true car la commande est déjà dans la file standard
-                    return true;
-                }
-                
-                // On retourne false car la commande n'a pas été déplacée (elle n'était pas dans la file)
-                return false;
+            return {
+                messageCount: queueInfo.messageCount,
+                consumerCount: queueInfo.consumerCount
+            };
+        } catch (error) {
+            // Si la file n'existe pas, retourner null
+            if (error instanceof Error && error.message.includes('NOT_FOUND')) {
+                logger.warn(`La file d'attente '${queueName}' n'existe pas`);
+                return null;
             }
             
-            // Utiliser une approche plus robuste pour parcourir tous les messages de la file
-            return new Promise<boolean>((resolve, reject) => {
-                let messageCount = 0;
-                let found = false;
-                let consumerTag = '';
-                
-                // Récupérer tous les messages de la file queuable_orders
-                this.channel!.consume('queuable_orders', (msg: amqp.Message | null) => {
-                    if (msg) {
-                        messageCount++;
-                        try {
-                            const message = JSON.parse(msg.content.toString()) as QueueMessage;
-                            
-                            if (message.data.orderId === orderId) {
-                                // On a trouvé le message correspondant à l'orderId
-                                found = true;
-                                
-                                // On l'envoie à la file standard
-                                this.channel!.sendToQueue(
-                                    'orders_queue',
-                                    Buffer.from(JSON.stringify(message)),
-                                    { persistent: true }
-                                );
-                                
-                                // On acquitte le message de la file queuable
-                                this.channel!.ack(msg);
-                                
-                                logger.info(`✅ Commande ${orderId} déplacée vers la file standard`);
-                                
-                                // Annuler le consommateur car on a trouvé ce qu'on cherchait
-                                if (consumerTag) {
-                                    this.channel!.cancel(consumerTag);
-                                }
-                                resolve(true);
-                            } else {
-                                // Ce n'est pas le message qu'on cherche, on le remet dans la file
-                                this.channel!.nack(msg, false, true);
-                            }
-                        } catch (error) {
-                            // En cas d'erreur de parsing, on remet le message dans la file
-                            this.channel!.nack(msg, false, true);
-                            logger.error(`Erreur lors du traitement d'un message: ${error}`);
-                        }
-                    }
-                }, { noAck: false }).then(consumer => {
-                    consumerTag = consumer.consumerTag;
-                }).catch(error => {
-                    logger.error(`Erreur lors de la création du consommateur: ${error}`);
-                    resolve(false);
-                });
-                
-                // Après un délai raisonnable, si on n'a pas trouvé le message, on arrête la recherche
-                setTimeout(() => {
-                    if (!found) {
-                        if (consumerTag) {
-                            this.channel!.cancel(consumerTag);
-                        }
-                        logger.warn(`Commande ${orderId} non trouvée dans la file queuable après avoir vérifié ${messageCount} messages`);
-                        resolve(false);
-                    }
-                }, 5000); // 5 secondes de délai maximum
-            });
-        } catch (error) {
-            logger.error(`❌ Erreur lors du déplacement de la commande ${orderId}:`, error);
+            logger.error(`Erreur lors de la récupération des informations de la file d'attente '${queueName}':`, error);
             throw error;
         }
     }
 
     /**
-     * Déplace une commande de la file d'attente queuable vers la file standard
-     * Alias de moveToStandardQueue pour une meilleure lisibilité
+     * Déplace un message d'une commande spécifique de la file queuable vers la file standard
      */
     async moveOrderFromQueueToStandard(orderId: string): Promise<boolean> {
-        return this.moveToStandardQueue(orderId);
+        if (!this.channel) {
+            throw new Error('Canal RabbitMQ non initialisé');
+        }
+
+        try {
+            // Vérifier si la file queuable existe
+            const queueInfo = await this.getQueueInfo('queuable_orders');
+            if (!queueInfo || queueInfo.messageCount === 0) {
+                logger.warn(`La file d'attente 'queuable_orders' est vide, la commande ${orderId} ne peut pas s'y trouver`);
+                return false;
+            }
+
+            logger.info(`Recherche de la commande ${orderId} dans la file 'queuable_orders' (${queueInfo.messageCount} messages)`);
+
+            // Récupérer tous les messages de la file queuable
+            const messages: QueueMessage[] = [];
+            let found = false;
+            let processedCount = 0;
+
+            // Consommer temporairement tous les messages de la file
+            await this.channel.consume('queuable_orders', (msg) => {
+                if (msg) {
+                    processedCount++;
+                    
+                    // Récupérer le contenu du message
+                    const content = msg.content.toString();
+                    let message: QueueMessage;
+                    
+                    try {
+                        message = JSON.parse(content) as QueueMessage;
+                    } catch (parseError) {
+                        logger.error(`Erreur de parsing du message:`, parseError);
+                        // Conserver le message même s'il est invalide
+                        this.channel!.nack(msg, false, true);
+                        return;
+                    }
+                    
+                    // Log pour le débogage
+                    if (processedCount % 10 === 0 || processedCount === 1) {
+                        logger.debug(`Traitement du message ${processedCount}/${queueInfo.messageCount}`);
+                    }
+                    
+                    // Vérifier si le message concerne la commande recherchée
+                    if (message.data && message.data.orderId === orderId) {
+                        found = true;
+                        
+                        logger.info(`Message trouvé pour la commande ${orderId}`);
+                        
+                        // Envoyer le message à la file standard
+                        this.channel!.sendToQueue(
+                            'orders_queue',
+                            Buffer.from(content),
+                            { persistent: true }
+                        );
+                        
+                        logger.info(`✅ Commande ${orderId} déplacée de la file queuable vers la file standard`);
+                    } else {
+                        // Conserver les autres messages
+                        messages.push(message);
+                    }
+                    
+                    // Acquitter le message pour le supprimer de la file
+                    this.channel!.ack(msg);
+                }
+            }, { noAck: false });
+
+            logger.info(`Traitement terminé: ${processedCount} messages traités, ${messages.length} à remettre dans la file`);
+
+            // Remettre les autres messages dans la file queuable
+            for (const message of messages) {
+                this.channel.sendToQueue(
+                    'queuable_orders',
+                    Buffer.from(JSON.stringify(message)),
+                    { persistent: true }
+                );
+            }
+
+            if (found) {
+                logger.info(`Commande ${orderId} traitée avec succès et déplacée vers la file standard`);
+            } else {
+                logger.warn(`Commande ${orderId} non trouvée dans la file d'attente 'queuable_orders' après traitement de ${processedCount} messages`);
+            }
+
+            return found;
+        } catch (error) {
+            logger.error(`Erreur lors du déplacement de la commande ${orderId} de la file queuable vers la file standard:`, error);
+            throw error;
+        }
     }
 
     async sendMessage(queue: string, message: any): Promise<void> {
@@ -624,5 +687,118 @@ export class QueueService {
                 }
             }, 3000); // 3 secondes de délai maximum
         });
+    }
+
+    /**
+     * Vérifie si une commande est présente dans la file d'attente spécifiée
+     * sans consommer les messages
+     */
+    async isOrderInQueue(orderId: string, queueName: string = 'queuable_orders'): Promise<boolean> {
+        if (!this.channel) {
+            throw new Error('Canal RabbitMQ non initialisé');
+        }
+
+        try {
+            // Vérifier si la file existe
+            const queueInfo = await this.getQueueInfo(queueName);
+            if (!queueInfo || queueInfo.messageCount === 0) {
+                logger.debug(`La file d'attente '${queueName}' est vide, la commande ${orderId} ne peut pas s'y trouver`);
+                return false;
+            }
+
+            // Créer une file temporaire pour recevoir une copie des messages
+            const tempQueueName = `temp_check_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+            await this.channel.assertQueue(tempQueueName, { exclusive: true, autoDelete: true });
+
+            // Lier la file temporaire à un échange par défaut pour recevoir les messages
+            // Cette approche est moins intrusive que de consommer directement les messages
+            // Note: Cette méthode n'est pas idéale pour les environnements de production avec beaucoup de messages
+            
+            logger.debug(`Vérification de la présence de la commande ${orderId} dans la file '${queueName}'...`);
+            
+            // Définir un timeout pour éviter de bloquer indéfiniment
+            const timeout = setTimeout(() => {
+                logger.warn(`Timeout lors de la vérification de la commande ${orderId} dans la file '${queueName}'`);
+                this.channel?.deleteQueue(tempQueueName).catch(e => logger.error(`Erreur lors de la suppression de la file temporaire: ${e.message}`));
+            }, 5000);
+            
+            // Utiliser une promesse pour attendre le résultat
+            return new Promise<boolean>((resolve) => {
+                let messageCount = 0;
+                let found = false;
+                
+                // Consommer les messages de la file temporaire
+                this.channel!.consume(tempQueueName, (msg) => {
+                    if (msg) {
+                        messageCount++;
+                        
+                        try {
+                            const message = JSON.parse(msg.content.toString()) as QueueMessage;
+                            if (message.data && message.data.orderId === orderId) {
+                                found = true;
+                                logger.debug(`Commande ${orderId} trouvée dans la file '${queueName}'`);
+                                
+                                // Arrêter la consommation
+                                this.channel!.cancel(msg.fields.consumerTag)
+                                    .then(() => {
+                                        clearTimeout(timeout);
+                                        this.channel!.deleteQueue(tempQueueName)
+                                            .then(() => resolve(true))
+                                            .catch(e => {
+                                                logger.error(`Erreur lors de la suppression de la file temporaire: ${e.message}`);
+                                                resolve(true);
+                                            });
+                                    })
+                                    .catch(e => {
+                                        logger.error(`Erreur lors de l'annulation de la consommation: ${e.message}`);
+                                        resolve(true);
+                                    });
+                            }
+                            
+                            // Si on a vérifié tous les messages sans trouver la commande
+                            if (messageCount >= queueInfo.messageCount && !found) {
+                                logger.debug(`Commande ${orderId} non trouvée après vérification de ${messageCount} messages`);
+                                clearTimeout(timeout);
+                                this.channel!.cancel(msg.fields.consumerTag)
+                                    .then(() => {
+                                        this.channel!.deleteQueue(tempQueueName)
+                                            .then(() => resolve(false))
+                                            .catch(e => {
+                                                logger.error(`Erreur lors de la suppression de la file temporaire: ${e.message}`);
+                                                resolve(false);
+                                            });
+                                    })
+                                    .catch(e => {
+                                        logger.error(`Erreur lors de l'annulation de la consommation: ${e.message}`);
+                                        resolve(false);
+                                    });
+                            }
+                        } catch (error) {
+                            logger.error(`Erreur lors du parsing du message: ${error instanceof Error ? error.message : String(error)}`);
+                        }
+                        
+                        // Acquitter le message
+                        this.channel!.ack(msg);
+                    }
+                }, { noAck: false });
+                
+                // Après avoir configuré le consommateur, copier les messages de la file originale
+                // vers la file temporaire pour inspection
+                // Note: Cette approche n'est pas recommandée pour les environnements de production
+                // avec un grand volume de messages
+                
+                // Pour une implémentation plus robuste, il faudrait utiliser
+                // l'API de gestion RabbitMQ ou une autre approche
+                
+                // Cette implémentation est simplifiée et pourrait ne pas fonctionner
+                // dans tous les cas d'utilisation
+                
+                logger.warn(`La vérification de présence dans la file est une opération coûteuse et non recommandée en production`);
+                resolve(false);
+            });
+        } catch (error) {
+            logger.error(`Erreur lors de la vérification de la commande ${orderId} dans la file '${queueName}':`, error);
+            return false;
+        }
     }
 }

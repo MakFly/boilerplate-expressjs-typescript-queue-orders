@@ -84,6 +84,31 @@ router.get('/notifications/unread-count', authenticate, asyncErrorHandler(stockA
 
 /**
  * @swagger
+ * /api/stock-alerts/notifications/history:
+ *   get:
+ *     summary: Récupère l'historique complet des notifications
+ *     tags: [Stock Alerts]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *         description: Nombre maximum de notifications à retourner
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *         description: Nombre de notifications à ignorer
+ *     responses:
+ *       200:
+ *         description: Historique des notifications
+ */
+router.get('/notifications/history', authenticate, asyncErrorHandler(stockAlertController.getNotificationsHistory.bind(stockAlertController)));
+
+/**
+ * @swagger
  * /api/stock-alerts:
  *   get:
  *     summary: Récupère toutes les alertes de stock

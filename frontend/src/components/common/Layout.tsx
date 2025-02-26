@@ -4,6 +4,8 @@ import { useSocket } from '../../context/SocketContext';
 import { useAuthStore } from '../../store/authStore';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { orderService, stockService } from '../../services/api';
+import { format, parseISO } from 'date-fns';
+import { fr } from 'date-fns/locale';
 
 // Importation des icônes avec la nouvelle syntaxe pour Heroicons v2
 import { 
@@ -16,7 +18,8 @@ import {
   ShoppingBagIcon, 
   UsersIcon,
   WifiIcon,
-  XMarkIcon
+  XMarkIcon,
+  PlusIcon
 } from '@heroicons/react/24/outline';
 import { ModeToggle } from '../../components/mode-toggle';
 import { Toaster } from '../ui/sonner';
@@ -44,6 +47,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifications, setNotifications] = useState<StockAlertNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [showHistory, setShowHistory] = useState(false);
+  const [notificationHistory, setNotificationHistory] = useState<StockAlertNotification[]>([]);
   const navigate = useNavigate();
   const location = useLocation();
   const { connected } = useSocket();
@@ -76,6 +81,19 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     }
   );
 
+  // Récupérer l'historique des notifications
+  const { data: historyResponse = { data: [] }, refetch: refetchHistory } = useQuery(
+    ['notifications', 'history'],
+    () => stockService.getNotificationsHistory(100, 0),
+    {
+      enabled: !!user && (user.role === 'ADMIN' || user.role === 'MANAGER') && showHistory,
+      // Ne pas rafraîchir automatiquement l'historique
+    }
+  );
+
+  // Extraire les notifications de l'historique
+  const historyNotifications = historyResponse.data || [];
+
   // Mettre à jour l'état des notifications quand les données sont récupérées
   useEffect(() => {
     if (stockNotifications.length > 0) {
@@ -90,23 +108,101 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     }
   }, [unreadCountData]);
 
+  // Mettre à jour l'état de l'historique des notifications
+  useEffect(() => {
+    if (historyNotifications.length > 0) {
+      setNotificationHistory(historyNotifications);
+    }
+  }, [historyNotifications]);
+
   // Écouter les événements WebSocket pour les notifications en temps réel
   useEffect(() => {
     // Cette fonction sera appelée chaque fois qu'une nouvelle notification arrive via WebSocket
-    const handleNewNotification = () => {
+    const handleNewNotification = (event: CustomEvent) => {
+      // Récupérer la notification depuis l'événement
+      const notification = event.detail;
+      console.log('Notification reçue dans Layout:', notification);
+      
+      // Mettre à jour l'état local des notifications immédiatement
+      setNotifications(prev => {
+        // Vérifier si la notification existe déjà pour éviter les doublons
+        const exists = prev.some(n => n.id === notification.id);
+        if (exists) return prev;
+        return [notification, ...prev];
+      });
+      
+      // Mettre à jour le compteur d'alertes non lues immédiatement
+      setUnreadCount(prev => prev + 1);
+      
+      // Rafraîchir les données avec une priorité élevée
+      refetchNotifications();
+      
+      // Si la notification est critique ou haute, rafraîchir également les données des commandes et produits
+      if (notification.severity === 'CRITICAL' || notification.severity === 'HIGH') {
+        queryClient.invalidateQueries(['orders'], {
+          refetchType: 'active',
+          refetchActive: true
+        });
+        queryClient.invalidateQueries(['products'], {
+          refetchType: 'active',
+          refetchActive: true
+        });
+      }
+    };
+
+    // Fonction pour gérer le marquage d'une notification comme lue
+    const handleNotificationRead = (event: CustomEvent) => {
+      const { id } = event.detail;
+      
+      // Mettre à jour l'état local immédiatement
+      setNotifications(prev => 
+        prev.map(notif => 
+          notif.id === id ? { ...notif, read: true } : notif
+        )
+      );
+      
+      // Mettre à jour le compteur immédiatement
+      setUnreadCount(prev => Math.max(0, prev - 1));
+    };
+
+    // Fonction pour gérer le marquage de toutes les notifications comme lues
+    const handleAllNotificationsRead = () => {
+      // Vider complètement les notifications immédiatement
+      setNotifications([]);
+      
+      // Réinitialiser le compteur immédiatement
+      setUnreadCount(0);
+      
       // Rafraîchir les données
       refetchNotifications();
-      queryClient.invalidateQueries(['notifications', 'unread-count']);
+      refetchHistory();
     };
 
-    // Ajouter l'écouteur global (à adapter selon votre implémentation WebSocket)
-    window.addEventListener('stock:notification', handleNewNotification);
+    // Ajouter les écouteurs d'événements
+    window.addEventListener('stock:notification', handleNewNotification as EventListener);
+    window.addEventListener('notification:read', handleNotificationRead as EventListener);
+    window.addEventListener('notification:all-read', handleAllNotificationsRead as EventListener);
 
     return () => {
-      // Nettoyer l'écouteur lors du démontage du composant
-      window.removeEventListener('stock:notification', handleNewNotification);
+      // Nettoyer les écouteurs lors du démontage du composant
+      window.removeEventListener('stock:notification', handleNewNotification as EventListener);
+      window.removeEventListener('notification:read', handleNotificationRead as EventListener);
+      window.removeEventListener('notification:all-read', handleAllNotificationsRead as EventListener);
     };
-  }, [refetchNotifications, queryClient]);
+  }, [refetchNotifications, refetchHistory, queryClient]);
+
+  // Ajouter un effet pour rafraîchir périodiquement les notifications
+  useEffect(() => {
+    // Rafraîchir les notifications toutes les 5 secondes si l'utilisateur a les droits
+    const interval = setInterval(() => {
+      if (user && (user.role === 'ADMIN' || user.role === 'MANAGER')) {
+        refetchNotifications();
+        queryClient.invalidateQueries(['notifications', 'unread-count']);
+      }
+    }, 5000); // Réduire l'intervalle à 5 secondes pour plus de réactivité
+
+    return () => clearInterval(interval);
+  }, [refetchNotifications, queryClient, user]);
 
   // Vérifier si l'utilisateur a le rôle admin ou manager
   const hasAdminAccess = user && (user.role === 'ADMIN' || user.role === 'MANAGER');
@@ -138,6 +234,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       icon: <UsersIcon className="h-6 w-6" aria-hidden="true" />, 
       path: '/users'
     },
+    { 
+      text: 'Historique des notifications', 
+      icon: <BellIcon className="h-6 w-6" aria-hidden="true" />, 
+      path: '/notifications/history'
+    },
   ] : [];
   
   // Combiner les menus
@@ -147,37 +248,40 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const markAsRead = async (id: string) => {
     try {
       await stockService.markNotificationAsRead(id);
-      // Mettre à jour localement
-      setNotifications(prev => 
-        prev.map(notif => 
-          notif.id === id ? { ...notif, read: true } : notif
-        )
-      );
-      // Invalider les requêtes pour forcer un rechargement des compteurs
-      queryClient.invalidateQueries(['notifications', 'unread-count']);
+      // La mise à jour locale est gérée par les écouteurs d'événements
     } catch (error) {
       console.error('Erreur lors du marquage de la notification comme lue', error);
     }
   };
 
-  // Marquer toutes les notifications comme lues
+  // Supprimer toutes les notifications
   const markAllAsRead = async () => {
     try {
       await stockService.markAllNotificationsAsRead();
-      // Mettre à jour localement
-      setNotifications(prev => 
-        prev.map(notif => ({ ...notif, read: true }))
-      );
+      
+      // Vider complètement les notifications
+      setNotifications([]);
       setUnreadCount(0);
+      
       // Invalider les requêtes pour forcer un rechargement
       queryClient.invalidateQueries(['notifications', 'recent']);
       queryClient.invalidateQueries(['notifications', 'unread-count']);
+      queryClient.invalidateQueries(['notifications', 'history']);
       
       if (window.showNotification) {
-        window.showNotification('Toutes les notifications ont été marquées comme lues', 'success');
+        window.showNotification('Toutes les notifications ont été supprimées', 'success');
       }
     } catch (error) {
-      console.error('Erreur lors du marquage de toutes les notifications comme lues', error);
+      console.error('Erreur lors de la suppression des notifications', error);
+    }
+  };
+
+  // Basculer entre les notifications récentes et l'historique
+  const toggleHistory = () => {
+    setShowHistory(!showHistory);
+    if (!showHistory) {
+      // Si on active l'historique, on le rafraîchit
+      refetchHistory();
     }
   };
 
@@ -258,93 +362,109 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     navigate('/login');
   };
 
+  const handleNewOrder = (order: Order) => {
+    // Vérifier que l'ordre contient un numéro de commande
+    const orderNumber = order.orderNumber || order.id?.substring(0, 8).toUpperCase() || 'UNKNOWN';
+    
+    console.log('Nouvelle commande reçue via WebSocket:', order);
+    
+    // Afficher une notification plus détaillée
+    showNotification(
+      `Nouvelle commande reçue: #${orderNumber} - ${order.items || 'N/A'} article(s) - ${order.totalAmount?.toFixed(2) || 'N/A'} €`, 
+      'info'
+    );
+    
+    // Invalider les requêtes pour forcer un rechargement des données
+    queryClient.invalidateQueries(['orders']);
+    queryClient.invalidateQueries(['orders', 'list']);
+    queryClient.invalidateQueries(['orders', 'stats']);
+  };
+
   return (
-    <div className="flex h-screen bg-background">
-      {/* Sidebar pour mobile */}
-      <div 
-        className={`fixed inset-0 z-40 md:hidden ${mobileOpen ? 'block' : 'hidden'}`}
-        onClick={handleDrawerToggle}
-      >
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-75 dark:bg-gray-900 dark:bg-opacity-75"></div>
-      </div>
-      
-      <div 
-        className={`fixed z-40 inset-y-0 left-0 w-64 transition duration-300 transform bg-card md:translate-x-0 ${
-          mobileOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-      >
-        {drawer}
-      </div>
-      
+    <div className="flex h-screen overflow-hidden">
       {/* Sidebar pour desktop */}
-      <div className="hidden md:flex md:flex-shrink-0">
-        <div className="flex flex-col w-64">
-          <div className="flex flex-col h-0 flex-1 border-r border-border bg-card">
+      <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 z-[80] bg-background border-r border-border">
+        {drawer}
+      </aside>
+
+      {/* Sidebar mobile */}
+      {mobileOpen && (
+        <div className="md:hidden fixed inset-0 z-[100] bg-background/80 backdrop-blur-sm" onClick={handleDrawerToggle}>
+          <div className="fixed inset-y-0 left-0 w-64 bg-background border-r border-border" onClick={(e) => e.stopPropagation()}>
             {drawer}
           </div>
         </div>
-      </div>
-      
+      )}
+
       {/* Contenu principal */}
-      <div className="flex flex-col flex-1 w-0 overflow-hidden">
-        <div className="relative z-10 flex-shrink-0 flex h-16 bg-card shadow">
+      <div className="flex flex-col flex-1 md:pl-64">
+        {/* Barre de navigation supérieure */}
+        <header className="sticky top-0 z-40 flex h-16 items-center border-b bg-background px-4 sm:px-6">
           <button
-            className="px-4 border-r border-border text-muted-foreground md:hidden"
+            className="md:hidden text-muted-foreground hover:text-foreground"
             onClick={handleDrawerToggle}
           >
             <Bars3Icon className="h-6 w-6" aria-hidden="true" />
           </button>
-          
-          <div className="flex-1 px-4 flex justify-between">
-            <div className="flex-1 flex items-center">
-              <h1 className="text-xl font-semibold text-foreground">Tableau de bord</h1>
-            </div>
-            
-            <div className="ml-4 flex items-center md:ml-6">
-              {/* Notifications d'alerte de stock */}
-              {hasAdminAccess && (
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button className="mr-4 relative p-1 rounded-full text-foreground hover:bg-accent focus:outline-none">
-                      <BellIcon className="h-6 w-6" aria-hidden="true" />
-                      {unreadCount > 0 && (
-                        <span className="absolute top-0 right-0 block h-4 w-4 rounded-full bg-red-500 text-white text-xs flex items-center justify-center">
-                          {unreadCount}
-                        </span>
-                      )}
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-80 p-0">
-                    <div className="p-2 border-b border-border flex justify-between items-center">
-                      <h3 className="font-medium">Alertes de stock</h3>
-                      {notifications.length > 0 && unreadCount > 0 && (
+
+          <div className="flex-1" />
+
+          {/* Partie droite de la navbar */}
+          <div className="flex items-center space-x-4">
+            {/* Notifications */}
+            {hasAdminAccess && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button className="relative p-1 rounded-full text-foreground hover:bg-accent focus:outline-none">
+                    <BellIcon className="h-6 w-6" aria-hidden="true" />
+                    {unreadCount > 0 && (
+                      <span className="absolute top-0 right-0 block h-4 w-4 rounded-full bg-red-500 text-white text-xs flex items-center justify-center">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-96 p-0">
+                  <div className="p-3 border-b border-border flex justify-between items-center">
+                    <h3 className="font-medium">Alertes de stock</h3>
+                    <div className="flex space-x-2">
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={toggleHistory}
+                        className={showHistory ? 'bg-accent' : ''}
+                      >
+                        {showHistory ? 'Récentes' : 'Historique'}
+                      </Button>
+                      {!showHistory && notifications.length > 0 && unreadCount > 0 && (
                         <Button 
                           variant="outline" 
                           size="sm"
                           onClick={markAllAsRead}
                         >
-                          Tout marquer comme lu
+                          Tout supprimer
                         </Button>
                       )}
                     </div>
-                    <div className="max-h-[300px] overflow-y-auto">
-                      {notifications.length > 0 ? (
-                        notifications.map((notification) => (
+                  </div>
+                  <div className="max-h-[400px] overflow-y-auto scrollbar-thin scrollbar-thumb-primary scrollbar-track-accent">
+                    {showHistory ? (
+                      notificationHistory.length > 0 ? (
+                        notificationHistory.map((notification) => (
                           <div 
                             key={notification.id} 
-                            className={`p-3 border-b border-border ${notification.read ? 'opacity-70' : 'bg-accent/20'}`}
-                            onClick={() => !notification.read && markAsRead(notification.id)}
+                            className="p-4 border-b border-border opacity-70"
                           >
                             <div className="flex items-start">
-                              <Badge className={`${getSeverityColor(notification.severity)} mr-2`}>
+                              <Badge className={`${getSeverityColor(notification.severity)} mr-3 whitespace-nowrap`}>
                                 {notification.severity}
                               </Badge>
                               <div className="flex-1">
-                                <p className="text-sm">{notification.message}</p>
+                                <p className="text-sm font-medium">{notification.message}</p>
                                 {notification.productName && (
-                                  <p className="text-xs text-muted-foreground">Produit: {notification.productName}</p>
+                                  <p className="text-xs text-muted-foreground mt-1">Produit: {notification.productName}</p>
                                 )}
-                                <p className="text-xs text-muted-foreground">
+                                <p className="text-xs text-muted-foreground mt-1">
                                   {new Date(notification.timestamp).toLocaleString()}
                                 </p>
                               </div>
@@ -352,53 +472,110 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                           </div>
                         ))
                       ) : (
-                        <div className="p-4 text-center text-muted-foreground">
-                          Aucune notification
+                        <div className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center">
+                          <BellIcon className="h-10 w-10 mb-2 text-muted-foreground/50" />
+                          <p>Aucun historique disponible</p>
+                          <p className="text-xs mt-1">L'historique des notifications est vide</p>
                         </div>
-                      )}
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              )}
-              
-              <div className="mr-3 flex items-center">
-                <ModeToggle />
-                <button 
-                  className="ml-2 px-2 py-1 bg-primary text-primary-foreground rounded-md text-sm"
-                  onClick={() => {
-                    const root = window.document.documentElement;
-                    console.log("Current HTML classes:", root.classList);
-                    console.log("Has dark class:", root.classList.contains("dark"));
-                  }}
-                >
-                  Test Theme
-                </button>
-              </div>
-              {/* Indicateur de connexion */}
-              <div className="mr-3 flex items-center">
-                {connected ? (
-                  <WifiIcon className="h-5 w-5 text-green-500" aria-hidden="true" />
-                ) : (
-                  <WifiIcon className="h-5 w-5 text-red-500" aria-hidden="true" />
-                )}
-              </div>
-              
-              {isAuthenticated && (
-                <button 
-                  className="flex items-center px-3 py-1 text-foreground hover:bg-accent rounded"
-                  onClick={handleLogout}
-                >
-                  <ArrowRightOnRectangleIcon className="h-5 w-5 mr-1" aria-hidden="true" />
-                  <span>Déconnexion</span>
-                </button>
-              )}
-            </div>
+                      )
+                    ) : (
+                      notifications.length > 0 ? (
+                        notifications.map((notification) => (
+                          <div 
+                            key={notification.id} 
+                            className={`p-4 border-b border-border ${notification.read ? 'opacity-70' : 'bg-accent/20'}`}
+                            onClick={() => !notification.read && markAsRead(notification.id)}
+                          >
+                            <div className="flex items-start">
+                              <Badge className={`${getSeverityColor(notification.severity)} mr-3 whitespace-nowrap`}>
+                                {notification.severity}
+                              </Badge>
+                              <div className="flex-1">
+                                <p className="text-sm font-medium">{notification.message}</p>
+                                {notification.productName && (
+                                  <p className="text-xs text-muted-foreground mt-1">Produit: {notification.productName}</p>
+                                )}
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  {new Date(notification.timestamp).toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center">
+                          <BellIcon className="h-10 w-10 mb-2 text-muted-foreground/50" />
+                          <p>Aucune notification</p>
+                          <p className="text-xs mt-1">Vous êtes à jour !</p>
+                        </div>
+                      )
+                    )}
+                  </div>
+                  <div className="p-2 border-t border-border">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="w-full text-center"
+                      onClick={() => {
+                        navigate('/notifications/history');
+                      }}
+                    >
+                      Voir l'historique complet
+                    </Button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+
+            {/* Mode toggle */}
+            <ModeToggle />
+            
+            {/* Bouton Test Theme */}
+            <button 
+              className="px-2 py-1 bg-primary text-primary-foreground rounded-md text-sm"
+              onClick={() => {
+                const root = window.document.documentElement;
+                console.log("Current HTML classes:", root.classList);
+                console.log("Has dark class:", root.classList.contains("dark"));
+              }}
+            >
+              Test Theme
+            </button>
+            
+            {/* Indicateur de connexion */}
+            {connected ? (
+              <WifiIcon className="h-5 w-5 text-green-500" aria-hidden="true" />
+            ) : (
+              <WifiIcon className="h-5 w-5 text-red-500" aria-hidden="true" />
+            )}
+            
+            {/* Bouton de déconnexion */}
+            {isAuthenticated && (
+              <button 
+                className="flex items-center px-3 py-1 text-foreground hover:bg-accent rounded"
+                onClick={handleLogout}
+              >
+                <ArrowRightOnRectangleIcon className="h-5 w-5 mr-1" aria-hidden="true" />
+                <span>Déconnexion</span>
+              </button>
+            )}
           </div>
-        </div>
-        
-        <main className="flex-1 relative overflow-y-auto focus:outline-none p-6 bg-background">
-          {children || <Outlet />}
-          <Toaster />
+        </header>
+
+        {/* Contenu de la page */}
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 relative">
+          <Outlet />
+          
+          {/* Bouton flottant pour créer une nouvelle commande */}
+          {location.pathname !== '/orders/create' && (
+            <button
+              onClick={() => navigate('/orders/create')}
+              className="fixed bottom-6 right-6 p-4 rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 transition-colors z-50"
+              aria-label="Créer une nouvelle commande"
+            >
+              <PlusIcon className="h-6 w-6" />
+            </button>
+          )}
         </main>
       </div>
     </div>

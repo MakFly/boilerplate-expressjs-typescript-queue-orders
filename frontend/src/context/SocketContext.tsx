@@ -67,23 +67,56 @@ export const SocketProvider: React.FC<SocketContextProps> = ({ children, showNot
     newSocket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        console.log('Message WebSocket reçu:', data.type);
         
         // Gérer les différents types de messages
         switch (data.type) {
           case 'notification':
-            handleNotification(data.data);
+            // Traitement prioritaire des notifications
+            setTimeout(() => {
+              handleNotification(data.data);
+              // Forcer le rafraîchissement des données de notification
+              queryClient.invalidateQueries(['notifications', 'recent'], { 
+                refetchType: 'active',
+                refetchActive: true,
+                refetchInactive: false
+              });
+              queryClient.invalidateQueries(['notifications', 'unread-count'], { 
+                refetchType: 'active',
+                refetchActive: true,
+                refetchInactive: false
+              });
+            }, 0);
             break;
           case 'stock:notification':
-            handleStockNotification(data.data);
+            // Traitement prioritaire des notifications de stock
+            setTimeout(() => {
+              handleStockNotification(data.data);
+            }, 0);
             break;
           case 'order:new':
-            handleNewOrder(data.data);
+            // Traitement prioritaire des nouvelles commandes
+            setTimeout(() => {
+              handleNewOrder(data.data);
+            }, 0);
             break;
           case 'order:updated':
             handleOrderUpdated(data.data);
             break;
           case 'order:status':
             handleOrderStatus(data.data);
+            break;
+          case 'recent_notifications':
+            // Mise à jour immédiate du cache des notifications récentes
+            queryClient.setQueryData(['notifications', 'recent'], data.data);
+            break;
+          case 'notification:all-read':
+            // Déclencher un événement pour informer les composants que toutes les notifications ont été supprimées
+            window.dispatchEvent(new CustomEvent('notification:all-read'));
+            // Invalider les requêtes liées aux notifications pour forcer un rechargement
+            queryClient.invalidateQueries(['notifications', 'history']);
+            queryClient.invalidateQueries(['notifications', 'recent']);
+            queryClient.invalidateQueries(['notifications', 'unread-count']);
             break;
           default:
             console.log('Message reçu:', data);
@@ -105,26 +138,110 @@ export const SocketProvider: React.FC<SocketContextProps> = ({ children, showNot
   
   // Nouveau gestionnaire spécifique pour les notifications de stock
   const handleStockNotification = (notification: any) => {
+    console.log('Notification de stock reçue:', notification);
+    
+    // Mettre à jour immédiatement le cache des notifications récentes
+    // Cette approche est plus rapide que d'attendre une requête réseau
+    try {
+      const currentNotifications = queryClient.getQueryData(['notifications', 'recent']) || [];
+      queryClient.setQueryData(['notifications', 'recent'], [notification, ...currentNotifications]);
+      
+      // Incrémenter le compteur de notifications non lues
+      const currentCount = queryClient.getQueryData(['notifications', 'unread-count']) || 0;
+      queryClient.setQueryData(['notifications', 'unread-count'], currentCount + 1);
+    } catch (error) {
+      console.error('Erreur lors de la mise à jour du cache des notifications:', error);
+    }
+    
     // Afficher la notification visuelle à l'utilisateur
     showNotification(
       notification.message,
       getSeverityType(notification.severity)
     );
     
-    // Déclencher un événement personnalisé pour que les composants puissent réagir
+    // Déclencher un événement personnalisé pour que les composants puissent réagir immédiatement
     window.dispatchEvent(createStockNotificationEvent(notification));
     
-    // Invalider les requêtes liées aux notifications pour forcer un rechargement
-    queryClient.invalidateQueries(['notifications', 'recent']);
-    queryClient.invalidateQueries(['notifications', 'unread-count']);
+    // Invalider les requêtes liées aux notifications avec une priorité élevée
+    queryClient.invalidateQueries(['notifications', 'recent'], { 
+      refetchType: 'active',
+      refetchActive: true,
+      refetchInactive: true
+    });
+    queryClient.invalidateQueries(['notifications', 'unread-count'], { 
+      refetchType: 'active',
+      refetchActive: true,
+      refetchInactive: true
+    });
+    
+    // Invalider également les requêtes liées aux produits et commandes si la notification est critique
+    if (notification.severity === 'CRITICAL' || notification.severity === 'HIGH') {
+      queryClient.invalidateQueries(['products'], {
+        refetchType: 'active',
+        refetchActive: true
+      });
+      queryClient.invalidateQueries(['orders'], {
+        refetchType: 'active',
+        refetchActive: true
+      });
+      
+      // Si la notification contient un ID de produit, invalider spécifiquement ce produit
+      if (notification.productId) {
+        queryClient.invalidateQueries(['products', notification.productId], {
+          refetchType: 'active',
+          refetchActive: true
+        });
+      }
+      
+      // Si la notification contient un ID de commande, invalider spécifiquement cette commande
+      if (notification.orderId) {
+        queryClient.invalidateQueries(['orders', 'detail', notification.orderId], {
+          refetchType: 'active',
+          refetchActive: true
+        });
+      }
+    }
   };
 
   const handleNewOrder = (order: Order) => {
-    showNotification(`Nouvelle commande reçue: #${order.orderNumber}`, 'info');
-    // Invalider les requêtes pour forcer un rechargement des données
-    queryClient.invalidateQueries(['orders']);
-    queryClient.invalidateQueries(['orders', 'list']);
-    queryClient.invalidateQueries(['orders', 'stats']);
+    console.log('Nouvelle commande reçue via WebSocket:', order);
+    
+    // Vérifier que l'ordre contient un numéro de commande
+    const orderNumber = order.orderNumber || order.id?.substring(0, 8).toUpperCase() || 'UNKNOWN';
+    
+    // Afficher une notification plus détaillée
+    showNotification(
+      `Nouvelle commande reçue: #${orderNumber} - ${order.items || 'N/A'} article(s) - ${order.totalAmount?.toFixed(2) || 'N/A'} €`, 
+      'info'
+    );
+    
+    // Invalider les requêtes pour forcer un rechargement immédiat des données
+    queryClient.invalidateQueries(['orders'], {
+      refetchType: 'active',
+      refetchActive: true,
+      refetchInactive: true
+    });
+    queryClient.invalidateQueries(['orders', 'list'], {
+      refetchType: 'active',
+      refetchActive: true
+    });
+    queryClient.invalidateQueries(['orders', 'stats'], {
+      refetchType: 'active',
+      refetchActive: true
+    });
+    
+    // Vérifier si la commande contient des produits avec stock critique
+    // et déclencher un rafraîchissement des notifications si nécessaire
+    if (order.hasCriticalStock) {
+      queryClient.invalidateQueries(['notifications', 'recent'], { 
+        refetchType: 'active',
+        refetchActive: true
+      });
+      queryClient.invalidateQueries(['notifications', 'unread-count'], { 
+        refetchType: 'active',
+        refetchActive: true
+      });
+    }
   };
 
   const handleOrderUpdated = (order: Order) => {
@@ -137,7 +254,7 @@ export const SocketProvider: React.FC<SocketContextProps> = ({ children, showNot
   };
 
   const handleOrderStatus = ({ orderNumber, status, orderId }: { orderNumber: string; status: string; orderId?: string }) => {
-    // Notification spéciale pour les commandes confirmées
+    // Notification spéciale pour les commandes confirmées avec numéro de référence
     if (status === 'CONFIRMED') {
       showNotification(`🎉 Commande #${orderNumber} confirmée avec succès!`, 'success');
     } else {

@@ -17,6 +17,7 @@ import logger from '../../utils/logger';
 import { getWebSocketController } from '../../controllers/websocket.controller';
 import prisma from '../../config/prisma';
 import { socketService } from '../SocketService';
+import { setImmediate } from 'timers';
 
 /**
  * Service dédié à la gestion des alertes de stock
@@ -78,6 +79,10 @@ export class StockAlertService {
     async getRecentNotifications(limit: number = 20): Promise<StockAlertNotification[]> {
         try {
             const notifications = await this.prisma.client.stockAlertNotification.findMany({
+                where: {
+                    // Ne récupérer que les notifications non lues
+                    read: false
+                },
                 orderBy: {
                     timestamp: 'desc'
                 },
@@ -328,12 +333,19 @@ export class StockAlertService {
                 return null;
             }
 
+            // Validation supplémentaire pour les alertes de type QUEUED_ORDER
+            if (data.type === StockAlertType.QUEUED_ORDER && !data.orderId) {
+                logger.error('Cannot create QUEUED_ORDER alert without orderId');
+                throw new Error('orderId est requis pour les alertes de type QUEUED_ORDER');
+            }
+
             // Créer l'alerte
             const alert = await prisma.stockAlert.create({
                 data: {
                     type: data.type,
                     quantity: product.stock,
                     product_id: data.productId,
+                    order_id: data.orderId,
                     metadata: data.metadata || {},
                     notifications: {
                         create: {
@@ -459,6 +471,12 @@ export class StockAlertService {
         orderId: string
     ): Promise<void> {
         try {
+            // Validation: s'assurer que orderId n'est pas null ou vide
+            if (!orderId) {
+                logger.error(`Impossible de créer une alerte de commande en file d'attente: orderId est requis`);
+                throw new Error('orderId est requis pour les alertes de type QUEUED_ORDER');
+            }
+            
             // Vérifier si le produit existe et est queuable
             const product = await this.prisma.client.product.findUnique({
                 where: { id: productId },
@@ -488,7 +506,7 @@ export class StockAlertService {
                 type: StockAlertType.QUEUED_ORDER,
                 quantity,
                 productId,
-                orderId,
+                orderId, // orderId est maintenant garanti d'être non-null
                 severity: StockAlertSeverity.MEDIUM,
                 message: `Commande en attente pour ${product.name} (position ${queuePosition + 1})`,
                 metadata: {
@@ -681,10 +699,17 @@ export class StockAlertService {
             // 1. D'abord, enregistrer la notification dans la base de données
             const savedNotification = await this.createAlertNotification(notificationData);
             
-            // 2. Ajouter aux notifications récentes en mémoire et diffuser directement
-            this.notifySubscribers(savedNotification);
+            // 2. Ajouter aux notifications récentes en mémoire et diffuser immédiatement
+            // Utiliser setImmediate pour envoyer la notification dès que possible
+            setImmediate(() => {
+                try {
+                    this.notifySubscribers(savedNotification);
+                    logger.info(`Stock alert notification sent immediately for alert ${alertId} (notification ID: ${savedNotification.id})`);
+                } catch (error) {
+                    logger.error(`Error in immediate notification for alert ${alertId}:`, error);
+                }
+            });
             
-            logger.info(`Stock alert notification sent for alert ${alertId} (notification ID: ${savedNotification.id})`);
         } catch (error) {
             logger.error(`Error sending alert notification for alert ${alertId}: ${error}`);
             // Ne pas propager l'erreur pour ne pas bloquer le flux principal
@@ -981,15 +1006,24 @@ export class StockAlertService {
      */
     async markAllNotificationsAsRead(): Promise<number> {
         try {
+            // Marquer toutes les notifications comme lues au lieu de les supprimer
             const result = await this.prisma.client.stockAlertNotification.updateMany({
                 where: { read: false },
                 data: { read: true }
             });
             
-            logger.info(`Marked ${result.count} notifications as read`);
+            // Notifier tous les clients que toutes les notifications ont été marquées comme lues
+            const wsController = getWebSocketController();
+            if (wsController) {
+                wsController.broadcastToAllClients('notification:all-read', {
+                    message: 'Toutes les notifications ont été marquées comme lues'
+                });
+            }
+            
+            logger.info(`${result.count} notifications ont été marquées comme lues`);
             return result.count;
         } catch (error) {
-            logger.error(`Error marking all notifications as read: ${error instanceof Error ? error.message : 'Unknown error'}`, { error });
+            logger.error(`Erreur lors du marquage des notifications comme lues: ${error instanceof Error ? error.message : 'Erreur inconnue'}`, { error });
             throw error;
         }
     }
@@ -1004,6 +1038,86 @@ export class StockAlertService {
             });
         } catch (error) {
             logger.error(`Error getting unread notifications count: ${error instanceof Error ? error.message : 'Unknown error'}`, { error });
+            throw error;
+        }
+    }
+
+    /**
+     * Récupère l'historique complet des notifications, y compris celles marquées comme lues
+     */
+    async getNotificationsHistory(limit: number = 50, offset: number = 0): Promise<{ notifications: StockAlertNotification[], total: number }> {
+        try {
+            // Récupérer le nombre total de notifications pour la pagination
+            const total = await this.prisma.client.stockAlertNotification.count();
+            
+            // Récupérer les notifications avec pagination
+            const notifications = await this.prisma.client.stockAlertNotification.findMany({
+                orderBy: {
+                    timestamp: 'desc'
+                },
+                skip: offset,
+                take: limit,
+                include: {
+                    alert: {
+                        include: {
+                            product: true
+                        }
+                    }
+                }
+            });
+            
+            return {
+                total,
+                notifications: notifications.map((notification: any) => ({
+                    id: notification.id,
+                    alertId: notification.alert_id,
+                    message: notification.message,
+                    severity: notification.severity,
+                    timestamp: notification.timestamp.toISOString(),
+                    read: notification.read,
+                    metadata: notification.metadata,
+                    // Données dérivées de l'alerte
+                    type: notification.alert?.type || '',
+                    productId: notification.alert?.product_id || '',
+                    productName: notification.alert?.product?.name || ''
+                }))
+            };
+        } catch (error) {
+            logger.error('Erreur lors de la récupération de l\'historique des notifications', { error });
+            // En cas d'erreur, retourner un objet vide
+            return { notifications: [], total: 0 };
+        }
+    }
+
+    /**
+     * Récupère les alertes par type
+     */
+    async getAlertsByType(
+        type: StockAlertType, 
+        options: { limit?: number; offset?: number } = {}
+    ): Promise<any[]> {
+        try {
+            const { limit = 10, offset = 0 } = options;
+            
+            const alerts = await this.prisma.client.stockAlert.findMany({
+                where: { type },
+                orderBy: { created_at: 'desc' },
+                take: limit,
+                skip: offset,
+                include: {
+                    product: {
+                        select: {
+                            name: true,
+                            stock: true,
+                            is_queuable: true
+                        }
+                    }
+                }
+            });
+            
+            return alerts;
+        } catch (error) {
+            logger.error(`Erreur lors de la récupération des alertes de type ${type}:`, error);
             throw error;
         }
     }

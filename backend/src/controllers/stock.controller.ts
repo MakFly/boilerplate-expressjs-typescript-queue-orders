@@ -1,15 +1,26 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { StockTransactionService } from '../services/stocks/StockTransactionService';
 import { StockAlertService } from '../services/stocks/StockAlertService';
 import logger from '../utils/logger';
+import { PrismaService } from '../services/PrismaService';
+import { StockService } from '../services/stocks/StockService';
+import { StockRepository } from '../repositories/StockRepository';
+import { StockAlertType } from '../types/stock.types';
+import { AppError } from '../utils/AppError';
 
 export class StockController {
     private stockTransactionService: StockTransactionService;
     private stockAlertService: StockAlertService;
+    private prismaService: PrismaService;
+    private stockService: StockService;
+    private stockRepository: StockRepository;
 
     constructor() {
+        this.prismaService = new PrismaService();
+        this.stockRepository = new StockRepository(this.prismaService);
+        this.stockService = new StockService(this.stockRepository, this.prismaService);
+        this.stockAlertService = new StockAlertService(this.prismaService);
         this.stockTransactionService = new StockTransactionService();
-        this.stockAlertService = new StockAlertService();
     }
 
     // Méthodes pour les transactions de stock
@@ -62,29 +73,46 @@ export class StockController {
         }
     }
 
-    async resolveAlert(req: Request, res: Response): Promise<void> {
+    /**
+     * Marque une alerte comme résolue
+     */
+    async resolveAlert(req: Request, res: Response, next: NextFunction) {
         try {
-            const alert = await this.stockAlertService.resolveAlert(req.params.id);
-            res.json(alert);
+            const alertId = req.params.id;
+            if (!alertId) {
+                throw new AppError('ID d\'alerte manquant', 400);
+            }
+            
+            // Marquer l'alerte comme résolue
+            const alert = await this.stockAlertService.markAlertAsRead(alertId);
+            
+            res.json({
+                success: true,
+                message: 'Alerte marquée comme résolue',
+                data: alert
+            });
         } catch (error) {
-            logger.error(`Error resolving stock alert ${req.params.id}:`, error);
-            res.status(500).json({ error: 'Failed to resolve stock alert' });
+            next(error);
         }
     }
 
-    // Méthodes pour les notifications d'alerte
-    async getNotifications(req: Request, res: Response): Promise<void> {
+    /**
+     * Récupère toutes les notifications
+     */
+    async getNotifications(req: Request, res: Response, next: NextFunction) {
         try {
-            const { read, limit } = req.query;
-            const options = {
-                read: read === 'true' ? true : read === 'false' ? false : undefined,
-                limit: limit ? parseInt(limit as string) : undefined
-            };
-            const notifications = await this.stockAlertService.getNotifications(options);
-            res.json(notifications);
+            // Récupérer les notifications (qui sont des alertes de type PROCESSED)
+            const notifications = await this.stockAlertService.getAlertsByType(StockAlertType.PROCESSED, {
+                limit: parseInt(req.query.limit as string) || 10,
+                offset: parseInt(req.query.offset as string) || 0
+            });
+            
+            res.json({
+                success: true,
+                data: notifications
+            });
         } catch (error) {
-            logger.error('Error getting stock alert notifications:', error);
-            res.status(500).json({ error: 'Failed to get stock alert notifications' });
+            next(error);
         }
     }
 

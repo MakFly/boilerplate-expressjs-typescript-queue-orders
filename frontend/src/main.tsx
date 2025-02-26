@@ -11,6 +11,18 @@ import { ThemeProvider } from './components/theme-provider';
 
 // Fonction de notification qui utilise sonner
 const handleNotification = (message: string, severity: 'success' | 'info' | 'warning' | 'error') => {
+  // Filtrer les notifications pour n'afficher que celle avec la référence de commande
+  // lorsqu'il s'agit d'une confirmation de commande
+  if (message.includes('validée avec succès') && !message.includes('#')) {
+    return; // Ne pas afficher cette notification
+  }
+  
+  // Filtrer les notifications dupliquées pour les commandes confirmées
+  // Si on a déjà une notification avec # pour une commande confirmée, ne pas afficher les autres
+  if (message.includes('confirmée avec succès') && !message.includes('#')) {
+    return; // Ne pas afficher cette notification
+  }
+  
   switch (severity) {
     case 'success':
       toast.success(message);

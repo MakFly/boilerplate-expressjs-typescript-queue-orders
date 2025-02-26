@@ -15,8 +15,6 @@ build: ## Build the Docker image
 
 dev: ## Run the container in development mode with hot-reload
 	./start.sh dev
-	@echo "✅ Environnement de développement prêt!"
-	@exit 0
 
 prod: ## Run the container in production mode
 	./start.sh prod
@@ -46,11 +44,15 @@ seed: ## Seed the database
 	@docker exec -it $(CONTAINER_NAME) npx prisma migrate reset --force
 	@docker exec -it $(CONTAINER_NAME) npx prisma migrate deploy
 	@docker exec -it $(CONTAINER_NAME) pnpm run clean-queues
+	@docker exec -it $(CONTAINER_NAME) pnpm run clean-alerts
 	@docker exec -it $(CONTAINER_NAME) pnpm run seed
 	@docker exec -it $(CONTAINER_NAME) pnpm run queue-pending-orders
 
 clean-queues: ## Nettoyer les files d'attente RabbitMQ des commandes annulées
 	@docker exec -it $(CONTAINER_NAME) pnpm run clean-queues
+
+clean-alerts: ## Nettoyer les alertes obsolètes dans la base de données
+	@docker exec -it $(CONTAINER_NAME) pnpm run clean-alerts
 
 recharge-bdd: ## Recharge la base de données
 	@docker exec -it $(CONTAINER_NAME) pnpm prisma migrate dev

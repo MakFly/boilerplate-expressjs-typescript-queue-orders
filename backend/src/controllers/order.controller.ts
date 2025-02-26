@@ -1,5 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { OrderService } from '../services/OrderService';
+import { StockService } from '../services/stocks/StockService';
+import { StockRepository } from '../repositories/StockRepository';
+import { PrismaService } from '../services/PrismaService';
 import { CreateOrderDto } from '../dto/order.dto';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
@@ -7,8 +10,13 @@ import { getWebSocketController } from './websocket.controller';
 
 export class OrderController {
     private orderService: OrderService;
+    private stockService: StockService;
+    private prismaService: PrismaService;
 
     constructor() {
+        this.prismaService = new PrismaService();
+        const stockRepository = new StockRepository(this.prismaService);
+        this.stockService = new StockService(stockRepository, this.prismaService);
         this.orderService = new OrderService();
     }
 
@@ -53,36 +61,79 @@ export class OrderController {
      */
     async createOrder(req: Request, res: Response, next: NextFunction) {
         try {
-            const orderData: CreateOrderDto = req.body;
+            // Récupérer l'ID de l'utilisateur à partir du token JWT
+            if (!req.user || !req.user.id) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Utilisateur non authentifié',
+                    details: {
+                        body: req.body
+                    }
+                });
+            }
+
+            // Créer une copie de req.body et ajouter l'ID de l'utilisateur
+            const orderData: CreateOrderDto = {
+                ...req.body,
+                userId: req.user.id // Ajouter l'ID de l'utilisateur à partir du token JWT
+            };
+
             logger.info('Création d\'une nouvelle commande', { orderData });
+
+            // Validation des données d'entrée
+            if (!orderData.items || orderData.items.length === 0) {
+                logger.error('Données de commande invalides', { body: req.body });
+                return res.status(400).json({
+                    success: false,
+                    message: 'Données de commande invalides',
+                    details: {
+                        body: req.body,
+                        missingFields: ['items']
+                    }
+                });
+            }
 
             const newOrder = await this.orderService.createOrder(orderData);
             
             // Diffuser la notification de nouvelle commande via WebSocket
             const wsController = getWebSocketController();
             if (wsController) {
-                wsController.broadcastNewOrder(newOrder.order);
+                wsController.broadcastToAllClients('order:new', {
+                    orderId: newOrder.order.id,
+                    orderNumber: newOrder.order.id.substring(0, 8).toUpperCase(),
+                    status: newOrder.order.status,
+                    totalAmount: newOrder.order.totalAmount,
+                    createdAt: newOrder.order.createdAt
+                });
             }
             
-            // Formatage de la réponse pour ne garder que l'essentiel
-            const response = {
+            return res.status(201).json({
                 success: true,
                 message: 'Commande créée avec succès',
-                data: {
-                    orderId: newOrder.order.id,
-                    status: newOrder.status,
-                    totalAmount: newOrder.order.totalAmount,
-                    items: newOrder.order.items.map(item => ({
-                        productId: item.productId,
-                        quantity: item.quantity,
-                        price: item.price
-                    }))
-                }
-            };
-
-            res.status(201).json(response);
+                data: newOrder
+            });
         } catch (error) {
-            next(error);
+            logger.error('Erreur lors de la création d\'une commande', { error });
+            
+            // Formater l'erreur pour le client
+            if (error instanceof ApiError) {
+                return res.status(error.statusCode).json({
+                    success: false,
+                    message: error.message,
+                    details: error.details || {
+                        body: req.body
+                    }
+                });
+            }
+            
+            return res.status(500).json({
+                success: false,
+                message: 'Erreur lors de la création de la commande',
+                details: {
+                    body: req.body,
+                    error: error instanceof Error ? error.message : String(error)
+                }
+            });
         }
     }
 

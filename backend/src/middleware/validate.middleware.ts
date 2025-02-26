@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { Schema } from 'zod';
-import { AppError } from '../utils/AppError';
+import { ApiError } from '../utils/ApiError';
 
 // Type pour les erreurs Zod
 interface ZodErrorItem {
@@ -25,7 +25,7 @@ export const validateRequest = (schema: Schema, source: 'body' | 'query' | 'para
           message: error.message
         }));
         
-        throw new AppError('Erreur de validation', 422, true, formattedErrors);
+        throw ApiError.badRequest('Erreur de validation', formattedErrors);
       }
       
       // Remplacer les données validées
@@ -33,10 +33,10 @@ export const validateRequest = (schema: Schema, source: 'body' | 'query' | 'para
       
       next();
     } catch (error) {
-      if (error instanceof AppError) {
+      if (error instanceof ApiError) {
         next(error);
       } else {
-        next(new AppError('Erreur de validation', 422));
+        next(ApiError.badRequest('Erreur de validation'));
       }
     }
   };

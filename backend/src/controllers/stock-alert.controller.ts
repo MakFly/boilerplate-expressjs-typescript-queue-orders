@@ -144,9 +144,13 @@ export class StockAlertController {
         try {
             logger.info('Marquage de toutes les notifications comme lues');
             
-            await this.stockAlertService.markAllNotificationsAsRead();
+            const count = await this.stockAlertService.markAllNotificationsAsRead();
             
-            res.json({ success: true, message: 'Toutes les notifications ont été marquées comme lues' });
+            res.json({ 
+                success: true, 
+                message: 'Toutes les notifications ont été marquées comme lues',
+                count
+            });
         } catch (error) {
             // Propager l'erreur au middleware de gestion d'erreurs
             next(error instanceof Error 
@@ -170,6 +174,37 @@ export class StockAlertController {
             next(error instanceof Error 
                 ? ApiError.internal('Erreur lors de la récupération du nombre de notifications non lues', { originalError: error.message, stack: error.stack }) 
                 : ApiError.internal('Erreur lors de la récupération du nombre de notifications non lues', { originalError: error }));
+        }
+    }
+    
+    /**
+     * Récupère l'historique des notifications
+     */
+    async getNotificationsHistory(req: Request, res: Response, next: NextFunction) {
+        try {
+            const { limit = '50', offset = '0' } = req.query;
+            
+            logger.info('Récupération de l\'historique des notifications', { limit, offset });
+            
+            const result = await this.stockAlertService.getNotificationsHistory(
+                parseInt(limit.toString()),
+                parseInt(offset.toString())
+            );
+            
+            res.json({ 
+                success: true, 
+                data: result.notifications,
+                pagination: {
+                    total: result.total,
+                    limit: parseInt(limit.toString()),
+                    offset: parseInt(offset.toString())
+                }
+            });
+        } catch (error) {
+            // Propager l'erreur au middleware de gestion d'erreurs
+            next(error instanceof Error 
+                ? ApiError.internal('Erreur lors de la récupération de l\'historique des notifications', { originalError: error.message, stack: error.stack }) 
+                : ApiError.internal('Erreur lors de la récupération de l\'historique des notifications', { originalError: error }));
         }
     }
 } 

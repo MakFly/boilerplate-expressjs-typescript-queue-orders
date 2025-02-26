@@ -249,19 +249,40 @@ export class WebSocketController {
      * @param order Données de la commande
      */
     broadcastNewOrder(order: any): void {
+        // S'assurer que l'ordre a un numéro de commande
+        const orderNumber = order.orderNumber || order.id?.substring(0, 8).toUpperCase() || 'UNKNOWN';
+        
+        // Créer un objet simplifié pour la notification
+        const orderData = {
+            id: order.id,
+            orderNumber: orderNumber,
+            status: order.status,
+            totalAmount: order.totalAmount,
+            items: order.items?.length || 0,
+            createdAt: order.createdAt || new Date().toISOString()
+        };
+        
         const message = JSON.stringify({
             type: 'order:new',
-            data: order
+            data: orderData
         });
         
-        logger.info(`📢 Diffusion de la nouvelle commande ${order.id}`);
+        logger.info(`📢 Diffusion de la nouvelle commande ${orderNumber} (ID: ${order.id})`);
         
+        let clientCount = 0;
         // Envoyer à tous les clients connectés
         this.clients.forEach((client, ws) => {
             if (ws.readyState === WebSocket.OPEN) {
-                ws.send(message);
+                try {
+                    ws.send(message);
+                    clientCount++;
+                } catch (error) {
+                    logger.error(`Erreur lors de l'envoi de la notification au client ${client.id}:`, error);
+                }
             }
         });
+        
+        logger.info(`Notification de nouvelle commande envoyée à ${clientCount} clients`);
     }
 
     /**
@@ -276,7 +297,7 @@ export class WebSocketController {
         
         logger.info(`📢 Diffusion d'une notification de stock: [${notification.severity}] ${notification.message}`);
         
-        // Envoyer aux clients abonnés
+        // Envoyer immédiatement aux clients abonnés avec priorité élevée
         this.clients.forEach((client, ws) => {
             const shouldSend = 
                 client.subscriptions.includes('all') || 
@@ -286,15 +307,47 @@ export class WebSocketController {
                 (notification.severity === 'HIGH' && client.subscriptions.includes('high'));
             
             if (shouldSend && ws.readyState === WebSocket.OPEN) {
-                ws.send(message);
+                // Utiliser setTimeout avec délai 0 pour envoyer immédiatement mais sans bloquer
+                setTimeout(() => {
+                    try {
+                        ws.send(message);
+                    } catch (error) {
+                        logger.error(`Erreur lors de l'envoi de la notification au client ${client.id}:`, error);
+                    }
+                }, 0);
             }
         });
         
         // Ajouter au buffer de notifications
-        this.notificationBuffer.unshift(notification);
-        if (this.notificationBuffer.length > this.maxBufferSize) {
-            this.notificationBuffer = this.notificationBuffer.slice(0, this.maxBufferSize);
-        }
+        this.addToNotificationBuffer(notification);
+    }
+
+    /**
+     * Diffuse un message à tous les clients connectés, quelle que soit leur abonnement
+     * @param event Type d'événement à diffuser
+     * @param data Données à envoyer
+     */
+    broadcastToAllClients(event: string, data: any): void {
+        const message = JSON.stringify({
+            type: event,
+            data
+        });
+        
+        logger.info(`📢 Diffusion d'un message à tous les clients: ${event}`);
+        
+        // Envoyer à tous les clients connectés
+        this.clients.forEach((client, ws) => {
+            if (ws.readyState === WebSocket.OPEN) {
+                // Utiliser setTimeout avec délai 0 pour envoyer immédiatement mais sans bloquer
+                setTimeout(() => {
+                    try {
+                        ws.send(message);
+                    } catch (error) {
+                        logger.error(`Erreur lors de l'envoi du message au client ${client.id}:`, error);
+                    }
+                }, 0);
+            }
+        });
     }
 }
 

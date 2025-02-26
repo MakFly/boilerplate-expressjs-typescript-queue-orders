@@ -8,6 +8,17 @@ export interface OrderItem {
   totalPrice: number;
 }
 
+// Type pour les produits
+export interface Product {
+  id: string;
+  name: string;
+  price: number;
+  stock: number;
+  is_queuable: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Enum pour les rôles utilisateur
 export enum UserRole {
   ADMIN = 'ADMIN',

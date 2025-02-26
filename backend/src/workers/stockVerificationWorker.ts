@@ -95,24 +95,127 @@ export class StockVerificationWorker {
     private async monitorQueuableOrders(): Promise<void> {
         logger.info('Monitoring queuable orders queue...');
         
-        // On ne consomme pas les messages, on les laisse dans la file
-        // jusqu'à ce qu'ils soient traités manuellement via l'API
+        // Nettoyer les alertes invalides au démarrage
+        await this.cleanupInvalidAlerts();
+        
+        // Vérifier l'état des files d'attente au démarrage
+        await this.checkQueueStatus();
         
         // Vérifier périodiquement le nombre de commandes en attente
         setInterval(async () => {
             try {
+                // Vérifier l'état des files d'attente
+                await this.checkQueueStatus();
+                
                 // Récupérer les statistiques des alertes
                 const stats = await this.stockAlertService.getAlertStats();
                 
                 // Loguer le nombre de commandes en attente
-                const queuedOrders = stats.byType.QUEUED_ORDER;
+                const queuedOrders = stats.byType.QUEUED_ORDER || 0;
                 if (queuedOrders > 0) {
                     logger.info(`Il y a actuellement ${queuedOrders} commandes en attente de validation`);
+                    
+                    // Récupérer les détails des commandes en attente
+                    const alerts = await this.stockAlertService.getAlertsByType('QUEUED_ORDER', { limit: 10 });
+                    if (alerts && alerts.length > 0) {
+                        logger.info('Commandes en attente de validation:');
+                        
+                        // Récupérer les détails complets des commandes
+                        for (const alert of alerts) {
+                            try {
+                                // Vérifier que order_id n'est pas null avant de faire la requête
+                                if (!alert.order_id) {
+                                    logger.warn(`Alerte ${alert.id} sans order_id valide`);
+                                    continue;
+                                }
+                                
+                                const order = await this.prismaService.client.order.findUnique({
+                                    where: { id: alert.order_id },
+                                    include: {
+                                        items: {
+                                            include: {
+                                                product: true
+                                            }
+                                        }
+                                    }
+                                });
+                                
+                                if (order) {
+                                    const queuableItems = order.items.filter(item => item.product.is_queuable);
+                                    logger.info(`- Commande ${alert.order_id} (statut: ${order.status})`);
+                                    logger.info(`  Produits queuables: ${queuableItems.map(item => `${item.product.name} (qté: ${item.quantity})`).join(', ')}`);
+                                    logger.info(`  Créée le: ${new Date(order.createdAt).toLocaleString()}`);
+                                    
+                                    // Vérifier si la commande est dans RabbitMQ
+                                    try {
+                                        const queueInfo = await this.queueService.getQueueInfo('queuable_orders');
+                                        if (queueInfo && queueInfo.messageCount > 0) {
+                                            logger.info(`  Vérification de la présence dans RabbitMQ...`);
+                                            // Cette vérification est coûteuse, donc on ne la fait que pour les commandes récentes (< 24h)
+                                            const orderAge = Date.now() - new Date(order.createdAt).getTime();
+                                            if (orderAge < 24 * 60 * 60 * 1000) {
+                                                const isInQueue = await this.checkOrderInQueue(order.id);
+                                                logger.info(`  Présence dans RabbitMQ: ${isInQueue ? 'OUI' : 'NON'}`);
+                                            }
+                                        }
+                                    } catch (error) {
+                                        logger.error(`  Erreur lors de la vérification dans RabbitMQ: ${error.message}`);
+                                    }
+                                } else {
+                                    logger.info(`- Commande ${alert.order_id} pour le produit ${alert.product_id} (quantité: ${alert.quantity})`);
+                                }
+                            } catch (error) {
+                                logger.error(`Erreur lors de la récupération des détails de la commande ${alert.order_id}:`, error);
+                            }
+                        }
+                    }
+                } else {
+                    logger.debug('Aucune commande en attente de validation');
                 }
             } catch (error) {
                 logger.error('Erreur lors de la vérification des commandes queuables:', error);
             }
-        }, 60000); // Vérification toutes les minutes
+        }, 30000); // Vérification toutes les 30 secondes
+    }
+    
+    // Nouvelle méthode pour vérifier l'état des files d'attente
+    private async checkQueueStatus(): Promise<void> {
+        try {
+            // Vérifier la file d'attente des commandes queuables
+            const queuableQueueInfo = await this.queueService.getQueueInfo('queuable_orders');
+            if (queuableQueueInfo) {
+                logger.info(`État de la file 'queuable_orders': ${queuableQueueInfo.messageCount} messages`);
+            } else {
+                logger.warn(`Impossible d'obtenir des informations sur la file 'queuable_orders'`);
+            }
+            
+            // Vérifier la file d'attente standard
+            const standardQueueInfo = await this.queueService.getQueueInfo('orders_queue');
+            if (standardQueueInfo) {
+                logger.info(`État de la file 'orders_queue': ${standardQueueInfo.messageCount} messages`);
+            } else {
+                logger.warn(`Impossible d'obtenir des informations sur la file 'orders_queue'`);
+            }
+            
+            // Vérifier la file d'attente de traitement
+            const processingQueueInfo = await this.queueService.getQueueInfo('orders_processing');
+            if (processingQueueInfo) {
+                logger.info(`État de la file 'orders_processing': ${processingQueueInfo.messageCount} messages`);
+            }
+        } catch (error) {
+            logger.error('Erreur lors de la vérification de l\'état des files d\'attente:', error);
+        }
+    }
+    
+    // Méthode pour vérifier si une commande est dans la file d'attente
+    private async checkOrderInQueue(orderId: string): Promise<boolean> {
+        try {
+            // Utiliser la nouvelle méthode du QueueService
+            return await this.queueService.isOrderInQueue(orderId, 'queuable_orders');
+        } catch (error) {
+            logger.error(`Erreur lors de la vérification de la commande ${orderId} dans la file d'attente:`, error);
+            return false;
+        }
     }
     
     // Méthode pour traiter manuellement une commande queuable
@@ -121,7 +224,7 @@ export class StockVerificationWorker {
             logger.info(`Processing queuable order ${orderId} manually...`);
             
             // Déplacer la commande de la file queuable vers la file standard
-            const moved = await this.queueService.moveToStandardQueue(orderId);
+            const moved = await this.queueService.moveOrderFromQueueToStandard(orderId);
             
             if (moved) {
                 logger.info(`Queuable order ${orderId} moved to standard queue for processing`);
@@ -154,6 +257,55 @@ export class StockVerificationWorker {
                 logger.error('Error cleaning up old alerts:', error);
             }
         }, 24 * 60 * 60 * 1000); // Une fois par jour
+    }
+
+    // Méthode pour nettoyer les alertes invalides (sans order_id)
+    private async cleanupInvalidAlerts(): Promise<void> {
+        try {
+            // Rechercher les alertes QUEUED_ORDER sans order_id
+            const invalidAlerts = await this.prismaService.client.stockAlert.findMany({
+                where: {
+                    type: 'QUEUED_ORDER',
+                    order_id: null
+                },
+                include: {
+                    notifications: true
+                }
+            });
+            
+            if (invalidAlerts.length > 0) {
+                logger.warn(`Trouvé ${invalidAlerts.length} alertes QUEUED_ORDER invalides sans order_id`);
+                
+                // Récupérer les IDs des alertes invalides
+                const invalidAlertIds = invalidAlerts.map(alert => alert.id);
+                
+                // D'abord supprimer les notifications associées à ces alertes
+                await this.prismaService.client.stockAlertNotification.deleteMany({
+                    where: {
+                        alert_id: {
+                            in: invalidAlertIds
+                        }
+                    }
+                });
+                
+                logger.info(`Supprimé les notifications associées aux alertes invalides`);
+                
+                // Ensuite supprimer les alertes
+                const result = await this.prismaService.client.stockAlert.deleteMany({
+                    where: {
+                        id: {
+                            in: invalidAlertIds
+                        }
+                    }
+                });
+                
+                logger.info(`Nettoyé ${result.count} alertes QUEUED_ORDER invalides`);
+            } else {
+                logger.debug('Aucune alerte QUEUED_ORDER invalide trouvée');
+            }
+        } catch (error) {
+            logger.error('Erreur lors du nettoyage des alertes invalides:', error);
+        }
     }
 }
 

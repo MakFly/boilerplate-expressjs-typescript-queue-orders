@@ -12,6 +12,7 @@ export interface QueueMessageData {
     orderId: string;
     hasQueuableProducts: boolean;
     reason?: string;
+    queuableItemsCount?: number;
     items: {
         productId: string;
         quantity: number;

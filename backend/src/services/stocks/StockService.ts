@@ -1,6 +1,7 @@
 import { StockRepository } from '../../repositories/StockRepository';
 import { PrismaService } from '../PrismaService';
 import { StockAlertService } from './StockAlertService';
+import { StockTransactionService, StockAdjustmentType } from './StockTransactionService';
 import logger from '../../utils/logger';
 import { StockAlertType } from '@prisma/client';
 
@@ -8,11 +9,15 @@ export class StockService {
     constructor(
         private stockRepository: StockRepository,
         private prismaService: PrismaService,
-        private stockAlertService?: StockAlertService
+        private stockAlertService?: StockAlertService,
+        private stockTransactionService?: StockTransactionService
     ) {
         // Créer le service d'alertes s'il n'est pas fourni
         if (!this.stockAlertService) {
             this.stockAlertService = new StockAlertService(prismaService);
+        }
+        if (!this.stockTransactionService) {
+            this.stockTransactionService = new StockTransactionService();
         }
     }
 
@@ -26,16 +31,51 @@ export class StockService {
         }
     }
 
-    async updateStockLevel(productId: string, quantity: number): Promise<number> {
+    /**
+     * Met à jour le stock d'un produit et enregistre la transaction
+     */
+    async updateStock(
+        productId: string, 
+        quantity: number, 
+        type: StockAdjustmentType, 
+        reference?: string, 
+        notes?: string
+    ): Promise<boolean> {
         try {
-            const newStockLevel = await this.stockRepository.updateStock(productId, quantity);
+            // Récupérer le produit avec son stock actuel
+            const product = await this.prismaService.client.product.findUnique({
+                where: { id: productId },
+                select: { id: true, name: true, stock: true }
+            });
+            
+            if (!product) {
+                logger.error(`Product ${productId} not found when updating stock`);
+                return false;
+            }
+            
+            // Créer la transaction de stock qui mettra à jour le stock du produit
+            await this.stockTransactionService!.createTransaction({
+                productId,
+                quantity,
+                type,
+                reference,
+                notes
+            });
             
             // Vérifier si une alerte de stock bas est nécessaire
-            await this.stockAlertService!.checkLowStockAlert(productId, newStockLevel);
+            const newStock = product.stock + quantity;
+            if (quantity < 0) { // Si c'est une diminution de stock
+                await this.stockAlertService!.checkLowStockAlert(
+                    productId,
+                    newStock,
+                    Math.abs(quantity),
+                    { orderId: reference }
+                );
+            }
             
-            return newStockLevel;
+            return true;
         } catch (error) {
-            logger.error(`Error updating stock level for product ${productId}:`, error);
+            logger.error(`Error updating stock for product ${productId}:`, error);
             throw error;
         }
     }
@@ -133,19 +173,13 @@ export class StockService {
                     continue;
                 }
                 
-                // Mettre à jour le stock
-                const newStock = product.stock - item.quantity;
-                await this.prismaService.client.product.update({
-                    where: { id: item.productId },
-                    data: { stock: newStock }
-                });
-                
-                // Vérifier si une alerte de stock bas est nécessaire
-                await this.stockAlertService!.checkLowStockAlert(
+                // Mettre à jour le stock et enregistrer la transaction
+                await this.updateStock(
                     item.productId,
-                    newStock,
-                    item.quantity,
-                    { orderId }
+                    -item.quantity, // Valeur négative car c'est une sortie de stock
+                    StockAdjustmentType.ORDER,
+                    orderId,
+                    `Commande #${orderId.substring(0, 8).toUpperCase()}`
                 );
             }
             

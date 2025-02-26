@@ -35,7 +35,7 @@ case "$1" in
         
         echo "✅ Environnement de développement prêt!"
 
-        exit 0
+        exit 1
         ;;
     prod)
         echo "🚀 Démarrage de l'environnement de production..."

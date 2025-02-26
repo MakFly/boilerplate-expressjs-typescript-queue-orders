@@ -4,6 +4,7 @@ import { QueueService } from '../services/QueueService';
 import { StockAlertType, StockAlertSeverity } from '../types/stock.types';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
+import { ApiError } from '../utils/ApiError';
 
 interface GetAlertsParams {
   limit: number;
@@ -262,11 +263,18 @@ export class StockAlertController {
         productId: alerts[0].productId,
         quantity: 0,
         orderId: orderId,
+        severity: StockAlertSeverity.LOW,
+        message: `Commande ${orderId} traitée avec succès`,
         metadata: {
           orderId,
           processedAt: new Date().toISOString()
         }
       });
+      
+      // Vérifier si l'alerte a été créée avec succès
+      if (!processedAlert) {
+        throw new ApiError(500, "Impossible de créer l'alerte de traitement");
+      }
       
       // Puis créer une notification associée à cette alerte
       await this.stockAlertService.createAlertNotification({

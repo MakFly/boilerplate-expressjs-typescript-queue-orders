@@ -21,7 +21,8 @@
     "prisma:studio": "prisma studio",
     "seed": "ts-node src/scripts/seed.ts",
     "queue-pending-orders": "ts-node src/scripts/queue-pending-orders.ts",
-    "clean-queues": "ts-node src/scripts/clean-queues.ts"
+    "clean-queues": "ts-node src/scripts/clean-queues.ts",
+    "clean-alerts": "ts-node src/scripts/clean-alerts.ts"
   },
   "keywords": [
     "express",

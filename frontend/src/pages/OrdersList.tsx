@@ -130,6 +130,10 @@ const OrdersList: React.FC = () => {
     navigate(`/orders/${id}`);
   };
 
+  const handleCreateOrder = () => {
+    navigate('/orders/create');
+  };
+
   const handleRefresh = () => {
     refetch();
   };
@@ -282,14 +286,23 @@ const OrdersList: React.FC = () => {
         <h2 className="text-2xl font-bold text-foreground">
           Liste des Commandes
         </h2>
-        <Button
-          variant="outline"
-          onClick={handleRefresh}
-          className="flex items-center gap-1"
-        >
-          <ArrowPathIcon className="h-5 w-5" />
-          Actualiser
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={handleCreateOrder}
+            className="flex items-center gap-1"
+          >
+            Nouvelle commande
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleRefresh}
+            className="flex items-center gap-1"
+          >
+            <ArrowPathIcon className="h-5 w-5" />
+            Actualiser
+          </Button>
+        </div>
       </div>
 
       {/* Cartes de statistiques */}
