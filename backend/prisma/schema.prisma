@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  role      Role     @default(USER)
+  orders    Order[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Product {
+  id          String      @id @default(uuid())
+  name        String
+  price       Float
+  stock       Int         @default(0)
+  is_queuable Boolean     @default(false)
+  orderItems  OrderItem[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  stockAlerts StockAlert[]
+  stockTransactions StockTransaction[]
+}
+
+model Order {
+  id                String      @id @default(uuid())
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  userId            String
+  status            String      @default("PENDING")
+  totalAmount       Float
+  cancellationReason String?
+  items             OrderItem[]
+  user              User        @relation(fields: [userId], references: [id])
+  stockAlerts       StockAlert[]
+}
+
+model OrderItem {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int
+  price     Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum StockAlertType {
+  LOW_STOCK
+  STOCK_OUT
+  FAILED_ORDER
+  QUEUED_ORDER
+  PROCESSED
+}
+
+model StockAlert {
+  id          String   @id @default(uuid())
+  type        StockAlertType
+  quantity    Int
+  created_at  DateTime @default(now())
+  product_id  String
+  order_id    String?
+  metadata    Json?
+  
+  product     Product  @relation(fields: [product_id], references: [id])
+  order       Order?   @relation(fields: [order_id], references: [id])
+  notifications StockAlertNotification[]
+
+  @@index([product_id])
+  @@index([order_id])
+}
+
+enum StockAlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model StockAlertNotification {
+  id          String             @id @default(uuid())
+  alert_id    String
+  alert       StockAlert         @relation(fields: [alert_id], references: [id])
+  message     String
+  severity    StockAlertSeverity
+  timestamp   DateTime           @default(now())
+  read        Boolean            @default(false)
+  metadata    Json?
+  
+  @@index([alert_id])
+  @@index([timestamp])
+}
+
+model StockTransaction {
+  id            String   @id @default(uuid())
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id])
+  quantity      Int
+  type          String
+  reference     String?
+  notes         String?
+  previousStock Int
+  newStock      Int
+  createdAt     DateTime @default(now())
+  
+  @@index([productId])
+  @@index([createdAt])
+}
+
+enum Role {
+  USER
+  ADMIN
+} 
